@@ -21,7 +21,7 @@ const PREFILTER_PATTERNS: RegExp[] = [
   /anyone else/i,
   /\b5\d\ds?\b/,
   /\btimeouts?\b/i,
-  /\btimed? out\b/i,
+  /\btim(e|ed|ing)s? ?out\b/i,
   /\bdown\b/i,
   /\bslow\b/i,
   /\berror(s|ing)?\b/i,
