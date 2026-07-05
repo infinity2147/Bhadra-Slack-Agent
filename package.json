@@ -1,0 +1,32 @@
+{
+  "name": "sentinel-ic",
+  "version": "0.1.0",
+  "description": "Slack-native AI incident commander: reads the room, runs the war room, writes the postmortem.",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "seed": "tsx scripts/seed.ts",
+    "demo": "tsx scripts/demo.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.57.0",
+    "@modelcontextprotocol/sdk": "^1.15.0",
+    "@slack/bolt": "^4.4.0",
+    "@xenova/transformers": "^2.17.2",
+    "better-sqlite3": "^12.2.0",
+    "dotenv": "^17.2.0",
+    "pino": "^9.7.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}
