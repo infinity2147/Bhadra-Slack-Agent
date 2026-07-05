@@ -126,7 +126,7 @@ npm run build   # strict TypeScript
 
 ## Repository layout
 
-See [INCIDENT_COMMANDER_SPEC.md](../INCIDENT_COMMANDER_SPEC.md) (§3) — the layout matches: engines in `src/engine/`, Block Kit builders in `src/slack/blocks/`, prompts centralized in `src/llm/prompts.ts`, mock MCP servers in `src/mcp/servers/`, seed/demo tooling in `scripts/`.
+See [INCIDENT_COMMANDER_SPEC.md](INCIDENT_COMMANDER_SPEC.md) (§3) — the layout matches: engines in `src/engine/`, Block Kit builders in `src/slack/blocks/`, prompts centralized in `src/llm/prompts.ts`, mock MCP servers in `src/mcp/servers/`, seed/demo tooling in `scripts/`.
 
 ## Non-goals (by design)
 No web dashboard outside Slack · no real Datadog/PagerDuty OAuth (mock MCP for the demo, swappable) · no multi-workspace support · no user-token message reading · **no external comms without human approval**.
