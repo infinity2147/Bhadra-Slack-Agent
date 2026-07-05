@@ -221,7 +221,7 @@ export function hasSignalForMessage(db: Database, channelId: string, messageTs: 
 
 export function insertInterview(
   db: Database,
-  iv: { incident_id: string; user_id: string; question: string; asked_at: number },
+  iv: { incident_id: string; user_id: string; question: string; asked_at: number | null },
 ): number {
   const res = db
     .prepare(`INSERT INTO interviews (incident_id, user_id, question, asked_at) VALUES (?, ?, ?, ?)`)
@@ -229,13 +229,45 @@ export function insertInterview(
   return Number(res.lastInsertRowid);
 }
 
-/** Oldest unanswered interview for a user (any incident) — used to match DM replies. */
+/** Oldest asked-but-unanswered interview for a user (any incident) — matches DM replies. */
 export function openInterviewFor(db: Database, userId: string): Interview | undefined {
   return db
     .prepare(
-      `SELECT * FROM interviews WHERE user_id = ? AND answer IS NULL ORDER BY asked_at ASC, id ASC LIMIT 1`,
+      `SELECT * FROM interviews WHERE user_id = ? AND answer IS NULL AND asked_at IS NOT NULL
+       ORDER BY asked_at ASC, id ASC LIMIT 1`,
     )
     .get(userId) as Interview | undefined;
+}
+
+/** Next queued (not yet DM'd) question for a user on an incident. */
+export function nextQueuedInterview(db: Database, userId: string, incidentId: string): Interview | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM interviews WHERE user_id = ? AND incident_id = ? AND asked_at IS NULL ORDER BY id ASC LIMIT 1`,
+    )
+    .get(userId, incidentId) as Interview | undefined;
+}
+
+export function markInterviewAsked(db: Database, id: number, askedAt: number): void {
+  db.prepare(`UPDATE interviews SET asked_at = ? WHERE id = ?`).run(askedAt, id);
+}
+
+export function unansweredInterviewCount(db: Database, incidentId: string): number {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM interviews WHERE incident_id = ? AND answer IS NULL`)
+    .get(incidentId) as { n: number };
+  return row.n;
+}
+
+/** Distinct human authors of war-room messages (postmortem participants). */
+export function messageAuthors(db: Database, incidentId: string): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT actor FROM timeline_events
+       WHERE incident_id = ? AND kind = 'message' AND actor IS NOT NULL AND actor != 'sentinel'`,
+    )
+    .all(incidentId) as { actor: string }[];
+  return rows.map((r) => r.actor);
 }
 
 export function answerInterview(db: Database, id: number, answer: string, answeredAt: number): void {
