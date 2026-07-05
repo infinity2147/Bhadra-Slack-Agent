@@ -21,6 +21,7 @@ import {
 import type { LlmClient } from '../llm/client.js';
 import { interviewQuestions, postmortemSynthesize } from '../llm/prompts.js';
 import type { SlackPort } from '../ports.js';
+import { postmortemReadyBlocks } from '../slack/blocks/postmortem.js';
 import { logger } from '../util/logger.js';
 import { fmtDuration, fmtUsd, now } from '../util/time.js';
 
@@ -174,7 +175,8 @@ export class PostmortemEngine {
       await this.slack
         .postMessage({
           channel: inc.channel_id,
-          text: `📋 Postmortem for *${inc.id}* is ready — synthesized from the timeline and ${interviews.length} interview answers. Blameless by design.`,
+          text: `📋 Postmortem for *${inc.id}* is ready.`,
+          blocks: postmortemReadyBlocks(inc, interviews.filter((i) => i.answer).length),
         })
         .catch(() => {});
     }

@@ -52,7 +52,19 @@ const CATEGORY_HEURISTICS: [RegExp, SignalCategory][] = [
   [/deploy|release|rollback|ship/i, 'deploy_suspicion'],
 ];
 
-const SERVICE_HINTS = ['checkout', 'payments', 'auth', 'search', 'cart', 'api', 'billing', 'login'];
+// Hints map surface nouns to owning services (cart lives in checkout, etc.).
+const SERVICE_HINTS: [string, string][] = [
+  ['checkout', 'checkout'],
+  ['cart', 'checkout'],
+  ['payments', 'payments'],
+  ['payment', 'payments'],
+  ['billing', 'payments'],
+  ['auth', 'auth'],
+  ['login', 'auth'],
+  ['sso', 'auth'],
+  ['search', 'search'],
+  ['api', 'api'],
+];
 
 /** Heuristic classification used when the LLM is unavailable (graceful degradation). */
 export function heuristicClassify(text: string): {
@@ -69,7 +81,7 @@ export function heuristicClassify(text: string): {
     }
   }
   const lower = text.toLowerCase();
-  const service = SERVICE_HINTS.find((s) => lower.includes(s)) ?? null;
+  const service = SERVICE_HINTS.find(([hint]) => lower.includes(hint))?.[1] ?? null;
   return { is_signal: true, category, service_guess: service, confidence: 0.6 };
 }
 
@@ -205,9 +217,14 @@ export class SignalEngine {
     const signals = unclusteredSignalsSince(this.db, minutesAgo(this.opts.windowMinutes));
     if (signals.length === 0) return null;
 
+    // Group by service (falling back to category). When the window contains
+    // exactly one distinct service, service-less signals almost certainly
+    // belong to the same brewing issue — fold them in.
+    const services = new Set(signals.map((s) => s.service_guess?.toLowerCase()).filter(Boolean));
+    const soleService = services.size === 1 ? [...services][0]! : null;
     const groups = new Map<string, Signal[]>();
     for (const s of signals) {
-      const key = (s.service_guess ?? s.category ?? 'unknown').toLowerCase();
+      const key = (s.service_guess ?? soleService ?? s.category ?? 'unknown').toLowerCase();
       groups.set(key, [...(groups.get(key) ?? []), s]);
     }
 
