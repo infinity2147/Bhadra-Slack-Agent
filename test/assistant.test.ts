@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { openDb } from '../src/db/index.js';
 import { answerIncidentQuestion } from '../src/engine/assistant.js';
 import { MemoryEngine } from '../src/engine/memory.js';
 import { LlmClient } from '../src/llm/client.js';
 import type { RtsClient } from '../src/rts/client.js';
+
+// Force the deterministic embedder — no model download in tests (matches memory.test.ts).
+beforeAll(() => {
+  process.env.SENTINEL_EMBEDDER = 'hash';
+});
 
 describe('answerIncidentQuestion — Real-Time Search integration', () => {
   it('queries RTS for live workspace echoes and folds them into the grounding context', async () => {
