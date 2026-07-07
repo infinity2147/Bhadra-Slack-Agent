@@ -97,7 +97,10 @@ export class PostmortemEngine {
           },
           interviewQuestions.schema,
         );
-        return out.questions;
+        // Guard against an empty set — otherwise the kickoff DM interpolates
+        // `questions[0]` into "*Q1:* undefined". Fall through to the generic set.
+        if (out.questions.length > 0) return out.questions;
+        logger.warn('interview question LLM returned no questions; using generic questions');
       } catch (err) {
         logger.warn({ err }, 'interview question LLM failed; using generic questions');
       }

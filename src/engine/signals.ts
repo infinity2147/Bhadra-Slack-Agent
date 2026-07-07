@@ -82,7 +82,13 @@ export function heuristicClassify(text: string): {
   }
   const lower = text.toLowerCase();
   const service = SERVICE_HINTS.find(([hint]) => lower.includes(hint))?.[1] ?? null;
-  return { is_signal: true, category, service_guess: service, confidence: 0.6 };
+  // 0.8, not 0.6: to even reach here a message already cleared the prefilter and
+  // matched a trouble-category pattern — that's high-precision. Crucially, this
+  // must sit at/above the default threshold (0.72) so that when the LLM is down,
+  // two heuristic signals from two humans still clear the clustering weight bar
+  // (threshold × 2). At 0.6 the offline path — and the flagship drill demo when
+  // ANTHROPIC_API_KEY is absent — could never declare. See clusterTick().
+  return { is_signal: true, category, service_guess: service, confidence: 0.8 };
 }
 
 export interface PreIncident {

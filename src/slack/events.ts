@@ -32,11 +32,13 @@ export function registerEvents(app: BoltApp, ctx: AppContext): void {
       if (msg.channel_type === 'im' && msg.user && msg.user !== ctx.botUserId && !msg.bot_id) {
         const consumed = await ctx.postmortem.handleDmReply(msg.user, msg.text);
         if (!consumed) {
+          await ctx.slack.setAssistantStatus?.(msg.channel, msg.thread_ts, 'is thinking…');
           const answer = await answerIncidentQuestion(
-            { db: ctx.db, llm: ctx.llm, memory: ctx.memory, rts: ctx.rts },
+            { db: ctx.db, llm: ctx.llm, memory: ctx.memory, rts: ctx.rts, channels: [...ctx.watchChannelIds] },
             msg.text,
           );
-          await ctx.slack.postMessage({ channel: msg.channel, text: answer });
+          await ctx.slack.setAssistantStatus?.(msg.channel, msg.thread_ts, '');
+          await ctx.slack.postMessage({ channel: msg.channel, text: answer, thread_ts: msg.thread_ts });
         }
         return;
       }
@@ -102,7 +104,10 @@ export function registerEvents(app: BoltApp, ctx: AppContext): void {
       const e = event as unknown as { channel: string; text: string; ts: string; thread_ts?: string };
       const question = e.text.replace(/<@[^>]+>/g, '').trim();
       if (!question) return;
-      const answer = await answerIncidentQuestion({ db: ctx.db, llm: ctx.llm, memory: ctx.memory, rts: ctx.rts }, question);
+      const answer = await answerIncidentQuestion(
+        { db: ctx.db, llm: ctx.llm, memory: ctx.memory, rts: ctx.rts, channels: [...ctx.watchChannelIds] },
+        question,
+      );
       await ctx.slack.postMessage({ channel: e.channel, text: answer, thread_ts: e.thread_ts ?? e.ts });
     }),
   );
@@ -117,8 +122,22 @@ export function registerEvents(app: BoltApp, ctx: AppContext): void {
       await ctx.slack.postMessage({
         channel,
         thread_ts: threadTs,
-        text: `🛡️ I'm ${ctx.config.appName} — your incident commander. Ask me things like _"what broke last week?"_, _"how did we fix the redis thing?"_, or say *start a drill*.`,
+        text: `🛡️ I'm ${ctx.config.appName} — your incident commander. Ask about past incidents, live trouble, or run a drill.`,
       });
+      // Slack AI capabilities: seed clickable starter prompts + name the thread,
+      // so the assistant surface is a first-class agent, not a plain message bot.
+      await ctx.slack.setSuggestedPrompts?.(
+        channel,
+        threadTs,
+        [
+          { title: 'What broke last week?', message: 'What incidents happened in the last 7 days?' },
+          { title: 'How did we fix the Redis issue?', message: 'How did we resolve the last Redis incident?' },
+          { title: 'Anything on fire right now?', message: 'Are there any active incidents or trouble signals right now?' },
+          { title: 'Run a Redis drill', message: 'Start a redis drill' },
+        ],
+        `Ask ${ctx.config.appName} about incidents`,
+      );
+      await ctx.slack.setAssistantTitle?.(channel, threadTs, `${ctx.config.appName} · Incident Q&A`);
     }),
   );
 }

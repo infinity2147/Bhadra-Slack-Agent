@@ -16,9 +16,9 @@ Incumbents (PagerDuty, Rootly, FireHydrant, incident.io) are **alert-driven exte
 
 | Technology | Where it's used |
 |---|---|
-| **Slack AI capabilities** | Assistant surface + App Home, AI-generated triage cards, status updates, postmortems (`assistant_view`, `assistant_thread_started`, App Home tab) |
-| **MCP server integration** | `src/mcp/hub.ts` client hub + three MCP servers over stdio: deploys, observability, on-call/paging (mocks bundled for the demo; swap real Datadog/PagerDuty/GitHub MCP servers via `ServerCommand` config) |
-| **Real-Time Search (RTS) API** | Early-warning signal polling over watched channels + historical incident echo recall (`src/rts/client.ts`, with a mandatory `conversations.history` fallback so the demo never breaks) |
+| **Slack AI capabilities** | First-class Assistant surface — `assistant.threads.setSuggestedPrompts` (clickable starters), `setStatus` ("is thinking…" while it answers), `setTitle` — plus App Home, AI-generated triage cards, status updates, postmortems (`assistant_view`, `assistant_thread_started`, App Home tab) |
+| **MCP server integration** | `src/mcp/hub.ts` client hub + three MCP servers over stdio: deploys, observability, on-call/paging (mocks bundled for the demo; swap real Datadog/PagerDuty/GitHub MCP servers via `ServerCommand` config). Per-server connect isolation: one server failing to spawn degrades that capability, not the whole hub |
+| **Real-Time Search (RTS) API** | Early-warning signal polling over watched channels + historical incident echo recall + **live workspace-echo grounding in the assistant** (Q&A fuses fresh RTS hits with incident memory). `src/rts/client.ts`, with a mandatory `conversations.history` fallback and auto re-probe so a transient failure never permanently downgrades the demo |
 
 Plus the **Anthropic API (Claude)** for all reasoning: signal classification, cluster summarization, memory fusion, three-register comms drafting, blameless interviewing, postmortem synthesis, and grounded Q&A — all prompts centralized in [src/llm/prompts.ts](src/llm/prompts.ts).
 
@@ -31,7 +31,7 @@ Plus the **Anthropic API (Claude)** for all reasoning: signal classification, cl
 5. **💸 Live cost meter** — `rate/min × minutes × severity multiplier`, ticking in the header via rate-limited `chat.update`. Configure with `/incident config cost checkout 400`.
 6. **📋 Blameless postmortem interviewer** — after resolve, DMs each participant 2–3 questions tailored to *their actual messages*, then synthesizes timeline + interviews into a blameless postmortem markdown doc, uploaded to the war room and stored in memory for future recall.
 7. **🎭 Chaos drill mode** — `/incident drill redis` seeds a fake deploy into the mock MCP server, elevates mock metrics, posts realistic trouble messages, and drives the **real pipeline** end-to-end. Training feature *and* demo recording mechanism.
-8. **🤖 Assistant Q&A** — DM the bot or @mention it: *"what broke last week?"*, *"how did we fix the redis thing?"* Answers are grounded in retrieved incidents with cited IDs — it says "I don't have record of that" rather than guessing.
+8. **🤖 Assistant Q&A** — open the Assistant panel (it greets you with clickable suggested prompts and shows an "is thinking…" status while it works), DM the bot, or @mention it: *"what broke last week?"*, *"how did we fix the redis thing?"*, *"anything on fire right now?"* Answers fuse **live workspace chatter (via RTS)** with retrieved incident memory, cite incident IDs, and say "I don't have record of that" rather than guessing.
 
 ## Architecture
 

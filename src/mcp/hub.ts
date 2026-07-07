@@ -45,6 +45,10 @@ export class McpHub implements McpPort {
   }
 
   async connectAll(): Promise<void> {
+    // Connect each server independently: a single server that fails to spawn
+    // (bad command, missing binary when a real MCP server is swapped in) must
+    // degrade to "that capability is unavailable" rather than taking the whole
+    // hub — and with it deploys + observability + oncall — down with it.
     for (const name of Object.keys(this.commands) as McpServerName[]) {
       const cmd = this.commands[name];
       const client = new Client({ name: `sentinel-hub-${name}`, version: '1.0.0' });
@@ -54,8 +58,12 @@ export class McpHub implements McpPort {
         env: { ...(process.env as Record<string, string>), ...cmd.env },
         stderr: 'ignore',
       });
-      await client.connect(transport);
-      this.clients.set(name, client);
+      try {
+        await client.connect(transport);
+        this.clients.set(name, client);
+      } catch (err) {
+        logger.error({ err, server: name }, 'MCP server failed to connect — that capability is unavailable');
+      }
     }
     // Tool inventory in the logs — part of the architecture story (spec §8).
     for (const [name, tools] of Object.entries(await this.listAllTools())) {

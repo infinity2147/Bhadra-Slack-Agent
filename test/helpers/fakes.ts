@@ -61,6 +61,26 @@ export class FakeSlack implements SlackPort {
   async joinChannel(channelId: string): Promise<void> {
     this.record('joinChannel', channelId);
   }
+  statuses: { channel: string; threadTs?: string; status: string }[] = [];
+  suggestedPrompts: { channel: string; threadTs?: string; prompts: { title: string; message: string }[]; greeting?: string }[] = [];
+  titles: { channel: string; threadTs?: string; title: string }[] = [];
+  async setAssistantStatus(channel: string, threadTs: string | undefined, status: string): Promise<void> {
+    this.record('setAssistantStatus', { channel, threadTs, status });
+    this.statuses.push({ channel, threadTs, status });
+  }
+  async setSuggestedPrompts(
+    channel: string,
+    threadTs: string | undefined,
+    prompts: { title: string; message: string }[],
+    greeting?: string,
+  ): Promise<void> {
+    this.record('setSuggestedPrompts', { channel, threadTs, prompts, greeting });
+    this.suggestedPrompts.push({ channel, threadTs, prompts, greeting });
+  }
+  async setAssistantTitle(channel: string, threadTs: string | undefined, title: string): Promise<void> {
+    this.record('setAssistantTitle', { channel, threadTs, title });
+    this.titles.push({ channel, threadTs, title });
+  }
 }
 
 export class FakeMcp implements McpPort {

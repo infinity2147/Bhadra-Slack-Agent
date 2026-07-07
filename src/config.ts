@@ -12,8 +12,12 @@ const envSchema = z.object({
   SLACK_APP_TOKEN: z.string().default(''),
   SLACK_SIGNING_SECRET: z.string().default(''),
   SLACK_MODE: z.enum(['socket', 'http']).default('socket'),
+  LLM_PROVIDER: z.enum(['auto', 'anthropic', 'openai']).default('auto'),
   ANTHROPIC_API_KEY: z.string().default(''),
   ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-6'),
+  OPENAI_API_KEY: z.string().default(''),
+  OPENAI_MODEL: z.string().default('gpt-4o'),
+  OPENAI_BASE_URL: z.string().default('https://api.openai.com/v1'),
   DB_PATH: z.string().default('./data/sentinel.db'),
   WATCH_CHANNELS: z.string().default('eng-general,deploys,support-escalations'),
   SIGNAL_POLL_SECONDS: z.coerce.number().default(45),
@@ -32,11 +36,27 @@ const envSchema = z.object({
 
 const env = envSchema.parse(process.env);
 
+// Provider resolution: honour LLM_PROVIDER when set explicitly; otherwise pick
+// whichever key is present (OpenAI wins if both are set). Falls back to
+// 'anthropic' with an empty key → LLM disabled (deterministic copy) if neither.
+type LlmProvider = 'anthropic' | 'openai';
+function resolveLlm(): { provider: LlmProvider; apiKey: string; model: string } {
+  const pref = env.LLM_PROVIDER;
+  const useOpenai = pref === 'openai' || (pref === 'auto' && !!env.OPENAI_API_KEY && !env.ANTHROPIC_API_KEY);
+  if (useOpenai) return { provider: 'openai', apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL };
+  return { provider: 'anthropic', apiKey: env.ANTHROPIC_API_KEY, model: env.ANTHROPIC_MODEL };
+}
+const llm = resolveLlm();
+
 export interface Config {
   slackBotToken: string;
   slackAppToken: string;
   slackSigningSecret: string;
   slackMode: 'socket' | 'http';
+  llmProvider: LlmProvider;
+  llmApiKey: string;
+  llmModel: string;
+  openaiBaseUrl: string;
   anthropicApiKey: string;
   anthropicModel: string;
   dbPath: string;
@@ -60,6 +80,10 @@ export const config: Config = {
   slackAppToken: env.SLACK_APP_TOKEN,
   slackSigningSecret: env.SLACK_SIGNING_SECRET,
   slackMode: env.SLACK_MODE,
+  llmProvider: llm.provider,
+  llmApiKey: llm.apiKey,
+  llmModel: llm.model,
+  openaiBaseUrl: env.OPENAI_BASE_URL,
   anthropicApiKey: env.ANTHROPIC_API_KEY,
   anthropicModel: env.ANTHROPIC_MODEL,
   dbPath: env.DB_PATH,

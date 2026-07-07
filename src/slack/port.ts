@@ -133,4 +133,45 @@ export class WebSlackPort implements SlackPort {
       logger.warn({ err, channelId }, 'join failed (private channel? invite the bot manually)');
     }
   }
+
+  // ── Slack AI / Assistant surface ──────────────────────────────────────────
+  // Called via apiCall so the port stays version-tolerant, and best-effort so a
+  // workspace/tier without the Assistant API never breaks the core Q&A flow.
+
+  async setAssistantStatus(channel: string, threadTs: string | undefined, status: string): Promise<void> {
+    if (!threadTs) return;
+    try {
+      await this.web.apiCall('assistant.threads.setStatus', { channel_id: channel, thread_ts: threadTs, status });
+    } catch (err) {
+      logger.warn({ err }, 'assistant.threads.setStatus failed (non-fatal)');
+    }
+  }
+
+  async setSuggestedPrompts(
+    channel: string,
+    threadTs: string | undefined,
+    prompts: { title: string; message: string }[],
+    greeting?: string,
+  ): Promise<void> {
+    if (!threadTs) return;
+    try {
+      await this.web.apiCall('assistant.threads.setSuggestedPrompts', {
+        channel_id: channel,
+        thread_ts: threadTs,
+        prompts,
+        ...(greeting ? { title: greeting } : {}),
+      });
+    } catch (err) {
+      logger.warn({ err }, 'assistant.threads.setSuggestedPrompts failed (non-fatal)');
+    }
+  }
+
+  async setAssistantTitle(channel: string, threadTs: string | undefined, title: string): Promise<void> {
+    if (!threadTs) return;
+    try {
+      await this.web.apiCall('assistant.threads.setTitle', { channel_id: channel, thread_ts: threadTs, title });
+    } catch (err) {
+      logger.warn({ err }, 'assistant.threads.setTitle failed (non-fatal)');
+    }
+  }
 }

@@ -29,15 +29,30 @@ export interface SlackWebLike {
  */
 export class RtsClient {
   private rtsHealthy = true;
+  private downSince = 0; // epoch ms of the last RTS failure (0 = healthy)
+  /** After a failure, re-probe RTS this long later rather than downgrading forever. */
+  private readonly reprobeMs: number;
+  private readonly clock: () => number;
 
-  constructor(private web: SlackWebLike) {}
+  constructor(private web: SlackWebLike, opts?: { reprobeMs?: number; clock?: () => number }) {
+    this.reprobeMs = opts?.reprobeMs ?? 5 * 60_000;
+    this.clock = opts?.clock ?? (() => Date.now());
+  }
 
   async searchMessages(q: RtsQuery): Promise<RtsResult[]> {
-    if (this.rtsHealthy) {
+    // A single transient failure shouldn't disable the real RTS path forever —
+    // re-probe once the cooldown elapses so we recover automatically (e.g. after
+    // a user token is added or a rate limit clears).
+    const shouldTryRts = this.rtsHealthy || this.clock() - this.downSince >= this.reprobeMs;
+    if (shouldTryRts) {
       try {
-        return await this.searchViaRts(q);
+        const out = await this.searchViaRts(q);
+        this.rtsHealthy = true;
+        this.downSince = 0;
+        return out;
       } catch (err) {
         this.rtsHealthy = false;
+        this.downSince = this.clock();
         logger.warn({ err }, 'RTS search failed — falling back to conversations.history scans');
       }
     }

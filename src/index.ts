@@ -37,10 +37,16 @@ async function main(): Promise<void> {
   const web = app.client as unknown as SlackWebApi;
   const slack = new WebSlackPort(web);
   const rts = new RtsClient(web);
-  const llm = config.anthropicApiKey
-    ? new LlmClient({ apiKey: config.anthropicApiKey, model: config.anthropicModel })
+  const llm = config.llmApiKey
+    ? new LlmClient({
+        apiKey: config.llmApiKey,
+        model: config.llmModel,
+        provider: config.llmProvider,
+        baseUrl: config.openaiBaseUrl,
+      })
     : null;
-  if (!llm) logger.warn('ANTHROPIC_API_KEY not set — running with deterministic fallback copy (no LLM drafting)');
+  if (llm) logger.info({ provider: config.llmProvider, model: config.llmModel }, 'LLM provider configured');
+  else logger.warn('No LLM API key set — running with deterministic fallback copy (no LLM drafting)');
 
   // MCP hub (mock servers for the demo; swap real server commands via config).
   let mcp: McpHub | undefined;

@@ -80,6 +80,18 @@ describe('SignalEngine clustering', () => {
     expect(card.text).toContain('⚠️');
   });
 
+  it('fires offline (LLM down) at the DEFAULT threshold — the drill/degraded path must still declare', async () => {
+    // Regression guard: heuristic confidence must sit at/above the default
+    // threshold so two humans clear the clustering weight bar (threshold × 2)
+    // without the LLM. Previously heuristic=0.6 → 2 signals=1.2 < 1.44 = silent no-fire.
+    const { engine } = makeEngine({ threshold: 0.72 }); // llm is null in makeEngine
+    await engine.handleMessage({ channelId: 'C1', ts: '1.0', userId: 'U1', text: 'checkout feels slow?' });
+    await engine.handleMessage({ channelId: 'C1', ts: '2.0', userId: 'U2', text: 'yeah checkout timeouts here too' });
+    const pre = await engine.clusterTick();
+    expect(pre).not.toBeNull();
+    expect(pre!.signalIds).toHaveLength(2);
+  });
+
   it('respects suppression cooldown and does not re-fire', async () => {
     const { engine } = makeEngine();
     await engine.handleMessage({ channelId: 'C1', ts: '1.0', userId: 'U1', text: 'checkout is slow' });
