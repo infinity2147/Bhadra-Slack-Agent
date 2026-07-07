@@ -1,6 +1,6 @@
 /** Button/modal handlers (spec §9): the full block-action surface. */
 import type { AppContext } from '../context.js';
-import { getConfigValue, getIncident, type Severity, type Signal } from '../db/index.js';
+import { getConfigValue, getIncident, getTenantReport, updateTenantReport, type Severity, type Signal } from '../db/index.js';
 import { isDrillSignalUser } from '../engine/drill.js';
 import type { Register } from '../llm/prompts.js';
 import { logger } from '../util/logger.js';
@@ -13,6 +13,7 @@ interface PreIncidentRecord {
   severity: Severity;
   signalIds: number[];
   sourceChannelId: string;
+  tenantReportId?: string;
 }
 
 function loadPreIncident(ctx: AppContext, key: string): PreIncidentRecord | null {
@@ -64,6 +65,10 @@ export function registerActions(app: BoltApp, ctx: AppContext): void {
           text: `🚨 Incident *${inc.id}* declared by <@${userId}> — war room: <#${inc.channel_id}>`,
         });
       }
+      // Customer-safe loop-back if this incident came from a tenant report.
+      if (pre.tenantReportId && inc) {
+        await ctx.reporter.onIncidentDeclaredFromReport(pre.tenantReportId, inc.id);
+      }
     }),
   );
 
@@ -93,6 +98,28 @@ export function registerActions(app: BoltApp, ctx: AppContext): void {
           text: `✋ Understood — not an incident. I'll suppress \`${pre?.service ?? 'this'}\` alerts for 24h and weigh similar chatter lower.`,
         });
       }
+    }),
+  );
+
+  // ── tenant report: decline ───────────────────────────────────────────────
+
+  app.action(
+    'decline_report',
+    withBoundary('action:decline_report', async ({ ack, body, action }) => {
+      await ack();
+      const reportId = buttonValue(action);
+      const report = getTenantReport(ctx.db, reportId);
+      if (!report) return;
+      updateTenantReport(ctx.db, reportId, { status: 'declined' });
+      const who = (body as { user: { id: string } }).user.id;
+      const channel = (body as { channel?: { id: string } }).channel?.id;
+      if (channel) await ctx.slack.postMessage({ channel, text: `✋ <@${who}> marked ${reportId} as not an incident.` });
+      // Customer-safe close-out in the tenant thread.
+      await ctx.slack.postMessage({
+        channel: report.source_channel_id,
+        thread_ts: report.source_thread_ts,
+        text: `Thanks for the report (ref \`${reportId}\`). We looked into it and it doesn't appear to be a service incident — our team will follow up if anything changes.`,
+      });
     }),
   );
 

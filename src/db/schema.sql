@@ -49,3 +49,37 @@ CREATE TABLE IF NOT EXISTS interviews (
 );
 
 CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
+
+CREATE TABLE IF NOT EXISTS tenants (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  slack_team_id TEXT,
+  tier TEXT,
+  default_channel_id TEXT NOT NULL,
+  extra_prompt TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tenant_routing_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  target_channel_id TEXT NOT NULL,
+  description TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tenant_reports (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  reporter_user_id TEXT,
+  report_text TEXT NOT NULL,
+  source_channel_id TEXT NOT NULL,
+  source_thread_ts TEXT NOT NULL,
+  routed_channel_id TEXT,
+  category TEXT,
+  severity_suggestion TEXT,
+  status TEXT NOT NULL,
+  incident_id TEXT,
+  created_at INTEGER NOT NULL
+);

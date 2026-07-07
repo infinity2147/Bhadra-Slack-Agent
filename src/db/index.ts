@@ -290,3 +290,120 @@ export function setConfigValue(db: Database, key: string, value: string): void {
     `INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
   ).run(key, value);
 }
+
+// ── tenants / routing rules / reports (customer incident reporter) ────────────
+
+export interface Tenant {
+  id: string;
+  name: string;
+  channel_id: string;
+  slack_team_id: string | null;
+  tier: string | null;
+  default_channel_id: string;
+  extra_prompt: string | null;
+  created_at: number;
+}
+
+export interface TenantRoutingRule {
+  id: number;
+  tenant_id: string;
+  target_channel_id: string;
+  description: string;
+  created_at: number;
+}
+
+export interface TenantReport {
+  id: string;
+  tenant_id: string;
+  reporter_user_id: string | null;
+  report_text: string;
+  source_channel_id: string;
+  source_thread_ts: string;
+  routed_channel_id: string | null;
+  category: string | null;
+  severity_suggestion: string | null;
+  status: string; // routed | declined | linked_incident
+  incident_id: string | null;
+  created_at: number;
+}
+
+export function insertTenant(db: Database, t: Tenant): void {
+  db.prepare(
+    `INSERT INTO tenants (id, name, channel_id, slack_team_id, tier, default_channel_id, extra_prompt, created_at)
+     VALUES (@id, @name, @channel_id, @slack_team_id, @tier, @default_channel_id, @extra_prompt, @created_at)
+     ON CONFLICT(id) DO UPDATE SET
+       name=excluded.name, channel_id=excluded.channel_id, slack_team_id=excluded.slack_team_id,
+       tier=excluded.tier, default_channel_id=excluded.default_channel_id, extra_prompt=excluded.extra_prompt`,
+  ).run(t as unknown as Record<string, unknown>);
+}
+
+export function getTenant(db: Database, id: string): Tenant | undefined {
+  return db.prepare(`SELECT * FROM tenants WHERE id = ?`).get(id) as Tenant | undefined;
+}
+
+export function getTenantByChannel(db: Database, channelId: string): Tenant | undefined {
+  return db.prepare(`SELECT * FROM tenants WHERE channel_id = ?`).get(channelId) as Tenant | undefined;
+}
+
+export function listTenants(db: Database): Tenant[] {
+  return db.prepare(`SELECT * FROM tenants ORDER BY id ASC`).all() as Tenant[];
+}
+
+export function removeTenant(db: Database, id: string): void {
+  const tx = db.transaction((tid: string) => {
+    db.prepare(`DELETE FROM tenant_routing_rules WHERE tenant_id = ?`).run(tid);
+    db.prepare(`DELETE FROM tenants WHERE id = ?`).run(tid);
+  });
+  tx(id);
+}
+
+export function insertRoutingRule(
+  db: Database,
+  r: { tenant_id: string; target_channel_id: string; description: string; created_at: number },
+): number {
+  const res = db
+    .prepare(`INSERT INTO tenant_routing_rules (tenant_id, target_channel_id, description, created_at) VALUES (?, ?, ?, ?)`)
+    .run(r.tenant_id, r.target_channel_id, r.description, r.created_at);
+  return Number(res.lastInsertRowid);
+}
+
+export function rulesForTenant(db: Database, tenantId: string): TenantRoutingRule[] {
+  return db
+    .prepare(`SELECT * FROM tenant_routing_rules WHERE tenant_id = ? ORDER BY id ASC`)
+    .all(tenantId) as TenantRoutingRule[];
+}
+
+export function nextTenantReportId(db: Database, dateStamp: string): string {
+  const prefix = `TR-${dateStamp}-`;
+  const row = db
+    .prepare(`SELECT id FROM tenant_reports WHERE id LIKE ? ORDER BY id DESC LIMIT 1`)
+    .get(`${prefix}%`) as { id: string } | undefined;
+  const n = row ? parseInt(row.id.slice(prefix.length), 10) + 1 : 1;
+  return `${prefix}${String(n).padStart(3, '0')}`;
+}
+
+export function insertTenantReport(db: Database, r: TenantReport): void {
+  db.prepare(
+    `INSERT INTO tenant_reports (id, tenant_id, reporter_user_id, report_text, source_channel_id,
+       source_thread_ts, routed_channel_id, category, severity_suggestion, status, incident_id, created_at)
+     VALUES (@id, @tenant_id, @reporter_user_id, @report_text, @source_channel_id,
+       @source_thread_ts, @routed_channel_id, @category, @severity_suggestion, @status, @incident_id, @created_at)`,
+  ).run(r as unknown as Record<string, unknown>);
+}
+
+export function getTenantReport(db: Database, id: string): TenantReport | undefined {
+  return db.prepare(`SELECT * FROM tenant_reports WHERE id = ?`).get(id) as TenantReport | undefined;
+}
+
+export function updateTenantReport(db: Database, id: string, patch: Partial<TenantReport>): void {
+  const keys = Object.keys(patch).filter((k) => k !== 'id');
+  if (keys.length === 0) return;
+  const sets = keys.map((k) => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE tenant_reports SET ${sets} WHERE id = @id`).run({ ...patch, id } as Record<string, unknown>);
+}
+
+export function tenantReportsForIncident(db: Database, incidentId: string): TenantReport[] {
+  return db
+    .prepare(`SELECT * FROM tenant_reports WHERE incident_id = ? ORDER BY id ASC`)
+    .all(incidentId) as TenantReport[];
+}

@@ -174,3 +174,32 @@ export const askIncidents = {
     return `Question: ${question}\n\nRetrieved context:\n${retrievedContext || '(empty)'}`;
   },
 };
+
+// ── P9: route a customer/tenant report to the right internal team ─────────────
+
+export const routeTenantReport = {
+  temperature: 0.2,
+  schema: z.object({
+    route: z.string(),
+    category: z.string(),
+    severity_suggestion: z.enum(['SEV1', 'SEV2', 'SEV3', 'SEV4']),
+    summary: z.string(),
+  }),
+  system: `You route a customer's problem report to the correct internal team for a SaaS vendor.
+
+You are given the customer's message, the customer's account name/tier, and a numbered list of routing rules — each with a KEY and a plain-language description of what it covers. Choose the single best-matching rule KEY. If nothing clearly matches, return "default".
+
+Also return: category (a short lowercase label like "payments", "auth", "performance"), severity_suggestion (SEV1 total outage / SEV2 major degradation / SEV3 partial / SEV4 minor — this is only a suggestion a human confirms; enterprise-tier accounts may warrant one level higher), and summary (one crisp sentence restating the problem for the internal team).
+
+${JSON_ONLY} Shape: {"route":"r2","category":"payments","severity_suggestion":"SEV2","summary":"..."}`,
+  buildUser(
+    text: string,
+    tenantName: string,
+    tier: string | null,
+    rules: { key: string; description: string }[],
+    extraPrompt: string | null,
+  ): string {
+    const ruleLines = rules.map((r) => `- ${r.key}: ${r.description}`).join('\n') || '(no rules; use "default")';
+    return `Customer: ${tenantName}${tier ? ` (tier: ${tier})` : ''}\n${extraPrompt ? `Special guidance: ${extraPrompt}\n` : ''}\nRouting rules:\n${ruleLines}\n- default: anything not matching a rule above\n\nCustomer report:\n${text}`;
+  },
+};

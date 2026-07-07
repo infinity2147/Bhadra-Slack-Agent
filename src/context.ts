@@ -6,6 +6,7 @@ import type { DrillEngine } from './engine/drill.js';
 import type { IncidentCore } from './engine/incident.js';
 import type { MemoryEngine } from './engine/memory.js';
 import type { PostmortemEngine } from './engine/postmortem.js';
+import type { ReporterEngine } from './engine/reporter.js';
 import type { SignalEngine } from './engine/signals.js';
 import type { LlmClient } from './llm/client.js';
 import type { McpHub } from './mcp/hub.js';
@@ -27,6 +28,7 @@ export interface AppContext {
   comms: CommsEngine;
   costMeter: CostMeter;
   postmortem: PostmortemEngine;
+  reporter: ReporterEngine;
   drill: DrillEngine;
   deduper: EventDeduper;
   /** Resolved channel IDs Sentinel watches for signals. */

@@ -101,7 +101,21 @@ export function registerEvents(app: BoltApp, ctx: AppContext): void {
   app.event(
     'app_mention',
     withBoundary('event:app_mention', async ({ event }) => {
-      const e = event as unknown as { channel: string; text: string; ts: string; thread_ts?: string };
+      const e = event as unknown as { channel: string; text: string; ts: string; thread_ts?: string; user?: string };
+      // Tenant report path: a customer @mention in a registered Slack Connect channel.
+      const tenant = ctx.reporter.tenantForChannel(e.channel);
+      if (tenant && e.user && e.user !== ctx.botUserId) {
+        const reportText = e.text.replace(/<@[^>]+>/g, '').trim();
+        if (!reportText) return;
+        await ctx.reporter.handleReport({
+          tenant,
+          reporterUserId: e.user,
+          text: reportText,
+          threadTs: e.thread_ts ?? e.ts,
+        });
+        return;
+      }
+      // Otherwise: internal assistant Q&A (unchanged).
       const question = e.text.replace(/<@[^>]+>/g, '').trim();
       if (!question) return;
       const answer = await answerIncidentQuestion(

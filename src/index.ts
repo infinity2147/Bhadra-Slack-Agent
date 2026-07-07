@@ -10,6 +10,7 @@ import { DrillEngine } from './engine/drill.js';
 import { IncidentCore } from './engine/incident.js';
 import { MemoryEngine } from './engine/memory.js';
 import { PostmortemEngine } from './engine/postmortem.js';
+import { ReporterEngine } from './engine/reporter.js';
 import { SignalEngine } from './engine/signals.js';
 import { LlmClient } from './llm/client.js';
 import { McpHub } from './mcp/hub.js';
@@ -105,6 +106,10 @@ async function main(): Promise<void> {
 
   const drill = new DrillEngine(slack, signals, mcp);
 
+  // Customer incident reporter: resolve tenant channels + route reports.
+  const reporter = new ReporterEngine(db, slack, llm);
+  reporter.loadCache();
+
   // LLM summarizer for resolution cards (P4).
   if (llm) {
     const { resolveSummarize } = await import('./llm/prompts.js');
@@ -162,6 +167,7 @@ async function main(): Promise<void> {
     comms.stop(incident.id);
     costMeter.stop(incident.id);
     await memory.indexIncident(incident).catch((err) => logger.warn({ err }, 'memory index failed'));
+    await reporter.onIncidentResolved(incident.id).catch((err) => logger.warn({ err }, 'reporter resolve loop-back failed'));
     postmortem.scheduleKickoff(incident.id);
     // Drill cleanup: reset elevated mock metrics.
     if (incident.is_drill) await drill.end();
@@ -180,6 +186,7 @@ async function main(): Promise<void> {
     comms,
     costMeter,
     postmortem,
+    reporter,
     drill,
     deduper: new EventDeduper(),
     watchChannelIds,

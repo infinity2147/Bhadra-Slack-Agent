@@ -33,6 +33,22 @@ Plus the **Anthropic API (Claude)** for all reasoning: signal classification, cl
 7. **🎭 Chaos drill mode** — `/incident drill redis` seeds a fake deploy into the mock MCP server, elevates mock metrics, posts realistic trouble messages, and drives the **real pipeline** end-to-end. Training feature *and* demo recording mechanism.
 8. **🤖 Assistant Q&A** — open the Assistant panel (it greets you with clickable suggested prompts and shows an "is thinking…" status while it works), DM the bot, or @mention it: *"what broke last week?"*, *"how did we fix the redis thing?"*, *"anything on fire right now?"* Answers fuse **live workspace chatter (via RTS)** with retrieved incident memory, cite incident IDs, and say "I don't have record of that" rather than guessing.
 
+## 📨 Customer incident reporting (multi-tenant)
+
+Give your customers a direct line without a helpdesk. Share one Slack Connect channel per customer, add Sentinel to it, and register the tenant from your **internal** channels:
+
+    /incident tenant add acme #acme-yourco --tier enterprise --default #support-triage
+    /incident tenant rule acme #payments-team  payments, billing, refunds, invoices
+    /incident tenant rule acme #platform-team   login, SSO, access, authentication
+    /incident tenant prompt acme  Acme is enterprise; treat checkout errors as urgent
+    /incident tenant list
+
+When someone at Acme **@mentions the bot** in their channel, Sentinel classifies the report against Acme's rules (LLM router with a keyword/default fallback), posts a triage card to the right internal team (`[Declare incident] [Decline]`), and acknowledges the customer in-thread. Declaring builds the usual war room; on declare and on resolve, the customer's thread gets a customer-safe update. Reports never leak internal channel names, war-room links, or cost figures back to the customer.
+
+Why @mention (not a slash command): Slack Connect does not deliver slash commands or interactive buttons to *external* users, so the customer trigger is an @mention. Admin `/incident tenant …` commands run from your own internal channels, and the customer never needs to install the app — they just need the bot added to the shared channel.
+
+Out of scope in v1 (planned next): cross-tenant correlation ("3 customers reporting the same thing → one incident"), SLA timers, and business-hours routing.
+
 ## Architecture
 
 ```
