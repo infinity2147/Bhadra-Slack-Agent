@@ -23,6 +23,8 @@ describe('IncidentCore', () => {
     expect(inc.status).toBe('active');
     expect(slack.channels[0]).toMatch(/^inc-\d{8}-checkout$/);
     expect(slack.posted[0].text).toContain(inc.id);
+    expect(slack.posted[1].text).toContain('Live incident timeline');
+    expect(JSON.stringify(slack.posted[1].blocks)).toContain('Incident declared');
     expect(slack.calls.some((c) => c.method === 'pin')).toBe(true);
     expect(slack.calls.filter((c) => c.method === 'addBookmark')).toHaveLength(3);
     const tl = getTimeline(db, inc.id);
@@ -57,6 +59,17 @@ describe('IncidentCore', () => {
     // allow the fire-and-forget header refresh to flush
     await new Promise((r) => setTimeout(r, 0));
     expect(slack.updated.length).toBeGreaterThan(0);
+  });
+
+  it('updates the live timeline card when war-room messages are recorded', async () => {
+    const { slack, core } = makeCore();
+    const inc = await core.declare({ title: 'Checkout latency spike', service: 'checkout' });
+    core.recordMessage(inc.id, { userId: 'U2', text: 'Restarted the Redis pool' });
+
+    await new Promise((r) => setTimeout(r, 0));
+    const timelineUpdate = slack.updated.find((u) => u.text.includes('Live incident timeline'));
+    expect(timelineUpdate).toBeDefined();
+    expect(JSON.stringify(timelineUpdate!.blocks)).toContain('Restarted the Redis pool');
   });
 
   it('resolve stamps resolved_at, uses summarizer, posts resolution card, fires hooks', async () => {

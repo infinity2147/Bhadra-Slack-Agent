@@ -49,13 +49,13 @@ export class PostmortemEngine {
     const inc = getIncident(this.db, incidentId);
     if (!inc || inc.status !== 'resolved') return;
 
-    const participants = messageAuthors(this.db, incidentId).slice(0, MAX_PARTICIPANTS);
+    const timeline = getTimeline(this.db, incidentId);
+    const participants = interviewParticipants(this.db, incidentId, timeline).slice(0, MAX_PARTICIPANTS);
     if (participants.length === 0) {
       await this.finalize(incidentId);
       return;
     }
 
-    const timeline = getTimeline(this.db, incidentId);
     for (const userId of participants) {
       const theirMessages = timeline
         .filter((e) => e.kind === 'message' && e.actor === userId)
@@ -185,6 +185,29 @@ export class PostmortemEngine {
     }
     return doc;
   }
+}
+
+function interviewParticipants(
+  db: Database,
+  incidentId: string,
+  timeline: ReturnType<typeof getTimeline>,
+): string[] {
+  const out = new Set<string>();
+  for (const userId of messageAuthors(db, incidentId)) {
+    if (isInterviewableUser(userId)) out.add(userId);
+  }
+  // Demo-robust fallback: if the incident was declared, roles were claimed, or
+  // updates were approved without much war-room chatter, still interview those
+  // human actors. Their questions will use the generic blameless set when they
+  // have no message-specific context.
+  for (const ev of timeline) {
+    if (isInterviewableUser(ev.actor)) out.add(ev.actor!);
+  }
+  return [...out];
+}
+
+function isInterviewableUser(userId: string | null | undefined): userId is string {
+  return !!userId && userId !== 'sentinel' && !userId.startsWith('drill-');
 }
 
 function templatePostmortem(

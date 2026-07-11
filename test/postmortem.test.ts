@@ -36,6 +36,20 @@ describe('PostmortemEngine', () => {
     expect(ivs.filter((i) => i.user_id === 'U1' && i.asked_at !== null)).toHaveLength(1);
   });
 
+  it('interviews human timeline actors even when nobody chatted in the war room', async () => {
+    const db = openDb();
+    const slack = new FakeSlack();
+    const core = new IncidentCore(db, slack, { costRateDefaultPerMin: 180, appName: 'Sentinel' });
+    const inc = await core.declare({ title: 'Fast drill', service: 'checkout', reporterId: 'UREPORTER' });
+    await core.resolve(inc.id, 'UREPORTER');
+
+    const pm = new PostmortemEngine(db, slack, null, { delaySeconds: 0, timeoutSeconds: 300 });
+    await pm.kickoff(inc.id);
+
+    expect(slack.dms.map((d) => d.userId)).toContain('UREPORTER');
+    expect(interviewsFor(db, inc.id).filter((i) => i.user_id === 'UREPORTER')).toHaveLength(3);
+  });
+
   it('routes DM replies to the open interview, asks the next question, and finalizes when done', async () => {
     const { db, slack, inc } = await resolvedIncident();
     const pm = new PostmortemEngine(db, slack, null, { delaySeconds: 0, timeoutSeconds: 300 });

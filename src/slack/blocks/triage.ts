@@ -4,6 +4,7 @@ import type { Block } from './warroom.js';
 
 export function triageBlocks(pre: PreIncident): Block[] {
   const users = [...new Set(pre.signals.map((s) => s.user_id))];
+  const categories = [...new Set(pre.signals.map((s) => s.category).filter(Boolean))];
   const lines: string[] = [`⚠️ *Possible incident brewing* — ${pre.one_line}`];
 
   if (pre.deploy) {
@@ -11,6 +12,9 @@ export function triageBlocks(pre: PreIncident): Block[] {
     lines.push(`🚢 Deploy \`${pre.deploy.service} ${pre.deploy.id}\` shipped ${ago} ago (\`${pre.deploy.title}\` by @${pre.deploy.author}).`);
   }
   if (pre.similarLine) lines.push(`🧠 ${pre.similarLine}`);
+  lines.push(
+    `🔎 *Why Sentinel flagged this:* ${users.length} distinct humans, ${pre.signals.length} live workspace signals${categories.length ? ` (${categories.join(', ')})` : ''}, service \`${pre.service}\`${pre.deploy ? ', recent deploy correlation' : ''}.`,
+  );
 
   const blocks: Block[] = [
     { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } },
@@ -19,7 +23,7 @@ export function triageBlocks(pre: PreIncident): Block[] {
       elements: [
         {
           type: 'mrkdwn',
-          text: `Signals from ${users.map((u) => `<@${u}>`).join(', ')} · suggested ${pre.severity_suggestion} · service \`${pre.service}\``,
+          text: `Live workspace evidence via Events API + Real-Time Search · signals from ${users.map((u) => `<@${u}>`).join(', ')} · suggested ${pre.severity_suggestion}`,
         },
       ],
     },

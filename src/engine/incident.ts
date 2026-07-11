@@ -17,7 +17,7 @@ import {
 import type { McpPort, SlackPort } from '../ports.js';
 import { logger } from '../util/logger.js';
 import { dateStamp, fmtDuration, now, slugify } from '../util/time.js';
-import { resolutionBlocks, warroomHeaderBlocks } from '../slack/blocks/warroom.js';
+import { resolutionBlocks, timelineSnapshotBlocks, warroomHeaderBlocks } from '../slack/blocks/warroom.js';
 
 export interface DeclareOpts {
   title: string;
@@ -156,6 +156,13 @@ export class IncidentCore {
     await this.slack.pin(channelId, header.ts).catch((err) => logger.warn({ err }, 'pin failed'));
     setConfigValue(this.db, `header:${id}`, `${header.channel}:${header.ts}`);
 
+    const timelineCard = await this.slack.postMessage({
+      channel: channelId,
+      text: `🕐 Live incident timeline for ${id}`,
+      blocks: timelineSnapshotBlocks(incident, getTimeline(this.db, id)),
+    });
+    setConfigValue(this.db, `timelinecard:${id}`, `${timelineCard.channel}:${timelineCard.ts}`);
+
     await this.addDefaultBookmarks(incident).catch((err) => logger.warn({ err }, 'bookmarks failed'));
 
     for (const hook of this.declaredHooks) {
@@ -210,6 +217,7 @@ export class IncidentCore {
         .postMessage({ channel: inc.channel_id, text: `🔁 Status changed: *${inc.status}* → *${to}* (by <@${actor}>)` })
         .catch((err) => logger.warn({ err }, 'status post failed'));
     }
+    void this.refreshTimeline(id).catch(() => {});
     return this.mustGet(id);
   }
 
@@ -224,6 +232,7 @@ export class IncidentCore {
       content: `<@${userId}> claimed role: ${role}`,
     });
     void this.refreshHeader(id).catch(() => {});
+    void this.refreshTimeline(id).catch(() => {});
     return this.mustGet(id);
   }
 
@@ -237,6 +246,7 @@ export class IncidentCore {
       content: `Severity set to ${severity}`,
     });
     void this.refreshHeader(id).catch(() => {});
+    void this.refreshTimeline(id).catch(() => {});
     return this.mustGet(id);
   }
 
@@ -248,12 +258,14 @@ export class IncidentCore {
       actor: msg.userId,
       content: msg.text,
     });
+    void this.refreshTimeline(id).catch(() => {});
   }
 
   setStatusLine(id: string, text: string, actor: string): void {
     setConfigValue(this.db, `statusline:${id}`, text);
     addTimelineEvent(this.db, { incident_id: id, ts: now(), kind: 'action', actor, content: `Manual status: ${text}` });
     void this.refreshHeader(id).catch(() => {});
+    void this.refreshTimeline(id).catch(() => {});
   }
 
   /** Re-render the pinned war-room header (used by cost meter tick + role/severity changes). */
@@ -272,6 +284,19 @@ export class IncidentCore {
         elapsed,
         statusLine: getConfigValue(this.db, `statusline:${id}`),
       }),
+    });
+  }
+
+  async refreshTimeline(id: string): Promise<void> {
+    const inc = this.mustGet(id);
+    const loc = getConfigValue(this.db, `timelinecard:${id}`);
+    if (!loc || !inc.channel_id) return;
+    const [channel, ts] = splitHeaderLoc(loc);
+    await this.slack.updateMessage({
+      channel,
+      ts,
+      text: `🕐 Live incident timeline for ${inc.id}`,
+      blocks: timelineSnapshotBlocks(inc, getTimeline(this.db, id)),
     });
   }
 
@@ -311,6 +336,7 @@ export class IncidentCore {
         .catch((err) => logger.warn({ err }, 'resolution card failed'));
     }
     await this.refreshHeader(id).catch(() => {});
+    await this.refreshTimeline(id).catch(() => {});
 
     for (const hook of this.resolvedHooks) {
       try {

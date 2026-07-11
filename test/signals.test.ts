@@ -78,6 +78,9 @@ describe('SignalEngine clustering', () => {
     expect(card.channel).toBe('C1');
     expect(card.thread_ts).toBe('2.0');
     expect(card.text).toContain('⚠️');
+    const rendered = JSON.stringify(card.blocks);
+    expect(rendered).toContain('Why Sentinel flagged this');
+    expect(rendered).toContain('Real-Time Search');
   });
 
   it('fires offline (LLM down) at the DEFAULT threshold — the drill/degraded path must still declare', async () => {

@@ -1,4 +1,4 @@
-import type { Incident } from '../../db/index.js';
+import type { Incident, TimelineEvent } from '../../db/index.js';
 import { fmtDuration, fmtUsd } from '../../util/time.js';
 
 /** Block Kit blocks are built as plain objects; Slack validates shape server-side. */
@@ -20,6 +20,7 @@ export function warroomHeaderBlocks(
   live: { costUsd: number; elapsed: number; statusLine?: string },
 ): Block[] {
   const drill = incident.is_drill ? ' · 🎭 DRILL' : '';
+  const delayRiskUsd = live.elapsed > 0 ? (live.costUsd / live.elapsed) * 600 : 0;
   const roles = [
     ['Commander', incident.commander_user_id],
     ['Comms', incident.comms_user_id],
@@ -41,6 +42,10 @@ export function warroomHeaderBlocks(
         { type: 'mrkdwn', text: `*Service:* ${incident.service ?? 'unknown'}` },
         { type: 'mrkdwn', text: `*Elapsed:* ⏱️ ${fmtDuration(live.elapsed)}` },
         { type: 'mrkdwn', text: `*Est. impact:* 💸 ${fmtUsd(live.costUsd)}` },
+        {
+          type: 'mrkdwn',
+          text: `*10m delay risk:* ${delayRiskUsd > 0 ? `💸 ${fmtUsd(delayRiskUsd)}` : '_calculating_'}`,
+        },
       ],
     },
     { type: 'section', text: { type: 'mrkdwn', text: roles } },
@@ -113,6 +118,49 @@ export function resolutionBlocks(incident: Incident, duration: string): Block[] 
     {
       type: 'context',
       elements: [{ type: 'mrkdwn', text: '📋 Postmortem interviews will start shortly. Sentinel will DM participants.' }],
+    },
+  ];
+}
+
+const TIMELINE_KIND_EMOJI: Record<string, string> = {
+  signal: '⚠️',
+  status_change: '🔁',
+  action: '🛠️',
+  message: '💬',
+  mcp_data: '📊',
+  update_sent: '📣',
+};
+
+export function timelineSnapshotBlocks(incident: Incident, timeline: TimelineEvent[]): Block[] {
+  const visible = timeline.slice(-6);
+  const rows =
+    visible.length > 0
+      ? visible
+          .map((event) => {
+            const t = new Date(event.ts * 1000).toISOString().slice(11, 16);
+            const emoji = TIMELINE_KIND_EMOJI[event.kind] ?? '•';
+            const actor = event.actor && event.actor !== 'sentinel' ? ` <@${event.actor}>` : '';
+            return `${emoji} \`${t}\`${actor} ${event.content.slice(0, 180)}`;
+          })
+          .join('\n')
+      : '_No timeline events yet._';
+
+  return [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `🕐 *Live incident timeline* (${incident.id})\n${rows}`,
+      },
+    },
+    {
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: 'Pin key messages with 📌. Sentinel promotes them into the timeline and the postmortem.',
+        },
+      ],
     },
   ];
 }

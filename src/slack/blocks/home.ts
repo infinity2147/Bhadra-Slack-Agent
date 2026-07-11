@@ -23,6 +23,14 @@ export function homeBlocks(data: {
       type: 'context',
       elements: [{ type: 'mrkdwn', text: 'Reads the room · runs the war room · writes the postmortem' }],
     },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text:
+          '*Demo path:* 🎭 Run drill → 🔎 detect live Slack chatter → 🚨 declare war room → 🧠 recall the last fix → 📋 publish postmortem',
+      },
+    },
     { type: 'divider' },
     { type: 'section', text: { type: 'mrkdwn', text: `*🚨 Active incidents (${active.length})*` } },
   ];
