@@ -203,3 +203,58 @@ ${JSON_ONLY} Shape: {"route":"r2","category":"payments","severity_suggestion":"S
     return `Customer: ${tenantName}${tier ? ` (tier: ${tier})` : ''}\n${extraPrompt ? `Special guidance: ${extraPrompt}\n` : ''}\nRouting rules:\n${ruleLines}\n- default: anything not matching a rule above\n\nCustomer report:\n${text}`;
   },
 };
+
+// ── P10: generate customer-safe guided intake questions ─────────────────────
+
+export const generateIntakeQuestions = {
+  temperature: 0.3,
+  schema: z.object({
+    questions: z.array(z.string()).min(2).max(3),
+  }),
+  system: `You write a short customer-facing intake script for a possible SaaS incident reported in Slack Connect.
+
+Generate 2-3 concise questions that will help internal responders understand impact, scope, timing, and the affected workflow. Tailor the questions to the initial report, the tenant tier/guidance, and the routing rules. Questions must be safe to ask in a customer channel: do not mention internal channel names, internal teams, war rooms, roster members, costs, or incident IDs. Do not ask the customer to use buttons, forms, slash commands, or anything outside the current thread.
+
+${JSON_ONLY} Shape: {"questions":["...","..."]}`,
+  buildUser(
+    initialText: string,
+    tenantName: string,
+    tier: string | null,
+    rules: { key: string; description: string }[],
+    extraPrompt: string | null,
+  ): string {
+    const ruleLines = rules.map((r) => `- ${r.key}: ${r.description}`).join('\n') || '(no routing rules)';
+    return `Customer: ${tenantName}${tier ? ` (tier: ${tier})` : ''}\n${extraPrompt ? `Special guidance: ${extraPrompt}\n` : ''}\nRouting rules:\n${ruleLines}\n\nInitial customer report:\n${initialText}`;
+  },
+};
+
+// ── P11: route + staff a completed customer intake ──────────────────────────
+
+export const routeAndStaffTenantReport = {
+  temperature: 0.2,
+  schema: z.object({
+    route: z.string(),
+    category: z.string(),
+    severity_suggestion: z.enum(['SEV1', 'SEV2', 'SEV3', 'SEV4']),
+    summary: z.string(),
+    roster_keys: z.array(z.string()).default([]),
+  }),
+  system: `You route a completed customer incident intake and choose the most relevant internal responders from a tenant-specific roster.
+
+You are given routing rules and roster entries with opaque KEYS. Choose exactly one route key, or "default" when no routing rule clearly applies. Choose zero or more roster keys whose role and match description make them useful for this incident. Only return roster keys from the provided roster list; never invent keys. Prefer a small focused group over everyone. Also return a concise internal summary, category, and severity suggestion.
+
+${JSON_ONLY} Shape: {"route":"r1","category":"payments","severity_suggestion":"SEV2","summary":"...","roster_keys":["u1"]}`,
+  buildUser(
+    transcript: string,
+    tenantName: string,
+    tier: string | null,
+    rules: { key: string; description: string }[],
+    roster: { key: string; role: string; matchText: string }[],
+    extraPrompt: string | null,
+  ): string {
+    const ruleLines = rules.map((r) => `- ${r.key}: ${r.description}`).join('\n') || '(no rules; use "default")';
+    const rosterLines =
+      roster.map((r) => `- ${r.key}: role=${r.role}; match=${r.matchText || '*'}`).join('\n') || '(no roster entries)';
+    return `Customer: ${tenantName}${tier ? ` (tier: ${tier})` : ''}\n${extraPrompt ? `Special guidance: ${extraPrompt}\n` : ''}\nRouting rules:\n${ruleLines}\n- default: anything not matching a rule above\n\nTenant roster:\n${rosterLines}\n\nCompleted intake transcript:\n${transcript}`;
+  },
+};

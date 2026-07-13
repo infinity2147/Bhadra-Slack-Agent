@@ -14,6 +14,8 @@ interface PreIncidentRecord {
   signalIds: number[];
   sourceChannelId: string;
   tenantReportId?: string;
+  inviteUserIds?: string[];
+  seedContext?: string;
 }
 
 function loadPreIncident(ctx: AppContext, key: string): PreIncidentRecord | null {
@@ -58,6 +60,8 @@ export function registerActions(app: BoltApp, ctx: AppContext): void {
         sourceChannelId: pre.sourceChannelId,
         signalIds: pre.signalIds,
         isDrill,
+        extraInviteUserIds: pre.inviteUserIds,
+        seedContext: pre.seedContext,
       });
       if (pre.sourceChannelId && inc.channel_id) {
         await ctx.slack.postMessage({

@@ -27,6 +27,8 @@ export interface DeclareOpts {
   sourceChannelId?: string;
   signalIds?: number[];
   isDrill?: boolean;
+  extraInviteUserIds?: string[];
+  seedContext?: string;
 }
 
 export type Role = 'commander' | 'comms' | 'scribe';
@@ -131,6 +133,9 @@ export class IncidentCore {
     // Invite reporter + on-call (best effort).
     const invitees = new Set<string>();
     if (opts.reporterId) invitees.add(opts.reporterId);
+    for (const userId of opts.extraInviteUserIds ?? []) {
+      if (userId) invitees.add(userId);
+    }
     if (this.opts.mcp && incident.service) {
       try {
         const oncall = (await this.opts.mcp.callTool('oncall', 'who_is_oncall', {
@@ -162,6 +167,20 @@ export class IncidentCore {
       blocks: timelineSnapshotBlocks(incident, getTimeline(this.db, id)),
     });
     setConfigValue(this.db, `timelinecard:${id}`, `${timelineCard.channel}:${timelineCard.ts}`);
+
+    if (opts.seedContext?.trim()) {
+      addTimelineEvent(this.db, {
+        incident_id: id,
+        ts: now(),
+        kind: 'action',
+        actor: 'sentinel',
+        content: `Customer intake context: ${opts.seedContext.slice(0, 1000)}`,
+      });
+      await this.slack.postMessage({
+        channel: channelId,
+        text: `📨 Customer intake context\n${opts.seedContext}`,
+      });
+    }
 
     await this.addDefaultBookmarks(incident).catch((err) => logger.warn({ err }, 'bookmarks failed'));
 

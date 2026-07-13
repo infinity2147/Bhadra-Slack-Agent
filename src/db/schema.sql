@@ -69,6 +69,15 @@ CREATE TABLE IF NOT EXISTS tenant_routing_rules (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS tenant_roster_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  user_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  match_text TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tenant_reports (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -82,4 +91,21 @@ CREATE TABLE IF NOT EXISTS tenant_reports (
   status TEXT NOT NULL,
   incident_id TEXT,
   created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tenant_intakes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  reporter_user_id TEXT,
+  source_channel_id TEXT NOT NULL,
+  source_thread_ts TEXT NOT NULL,
+  initial_text TEXT NOT NULL,
+  questions_json TEXT NOT NULL DEFAULT '[]',
+  answers_json TEXT NOT NULL,
+  next_question_index INTEGER NOT NULL,
+  status TEXT NOT NULL,             -- collecting|routed
+  report_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(source_channel_id, source_thread_ts)
 );

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   openDb,
   insertTenant, getTenant, getTenantByChannel, listTenants, removeTenant,
-  insertRoutingRule, rulesForTenant,
+  insertRoutingRule, rulesForTenant, insertRosterMember,
   nextTenantReportId, insertTenantReport, getTenantReport, updateTenantReport,
   tenantReportsForIncident,
   type Tenant, type TenantReport,
@@ -112,33 +112,138 @@ describe('ReporterEngine.route', () => {
 });
 
 describe('ReporterEngine.handleReport', () => {
-  it('routes, records the report, posts one triage card, and acks the customer safely', async () => {
+  it('uses LLM-generated intake questions when no tenant script is configured', async () => {
+    const db = seededDb();
+    const llm = new LlmClient({
+      model: 'test',
+      transport: async () =>
+        JSON.stringify({
+          questions: ['How many payment attempts are failing?', 'Which checkout path is affected?'],
+        }),
+    });
+    const eng = new ReporterEngine(db, new FakeSlack(), llm);
+    eng.loadCache();
+    const slack = (eng as unknown as { slack: FakeSlack }).slack;
+
+    await eng.handleReport({
+      tenant: eng.tenantForChannel('C_acme')!,
+      reporterUserId: 'UEXT',
+      text: 'payments are failing',
+      threadTs: '9.1',
+    });
+
+    expect(slack.posted[0].text).toContain('How many payment attempts are failing?');
+    const intake = db.prepare(`SELECT * FROM tenant_intakes WHERE source_thread_ts = ?`).get('9.1') as { questions_json: string };
+    expect(JSON.parse(intake.questions_json)).toEqual([
+      'How many payment attempts are failing?',
+      'Which checkout path is affected?',
+    ]);
+  });
+
+  it('uses LLM route-and-staff to choose roster members from allowed keys', async () => {
+    const db = seededDb();
+    insertRosterMember(db, {
+      tenant_id: 'acme',
+      user_id: 'U_PAY_IC',
+      role: 'payments ic',
+      match_text: 'payments billing checkout',
+      created_at: 3,
+    });
+    insertRosterMember(db, {
+      tenant_id: 'acme',
+      user_id: 'U_AUTH_IC',
+      role: 'auth ic',
+      match_text: 'login sso',
+      created_at: 4,
+    });
+    let calls = 0;
+    const llm = new LlmClient({
+      model: 'test',
+      transport: async () => {
+        calls += 1;
+        if (calls === 1) return JSON.stringify({ questions: ['impact?', 'where?'] });
+        return JSON.stringify({
+          route: 'r1',
+          category: 'payments',
+          severity_suggestion: 'SEV2',
+          summary: 'Payment failures during checkout.',
+          roster_keys: ['u1', 'u999'],
+        });
+      },
+    });
+    const eng = new ReporterEngine(db, new FakeSlack(), llm);
+    eng.loadCache();
+
+    await eng.handleReport({
+      tenant: eng.tenantForChannel('C_acme')!,
+      reporterUserId: 'UEXT',
+      text: 'checkout is failing',
+      threadTs: '9.2',
+    });
+    await eng.handleThreadReply({ channelId: 'C_acme', threadTs: '9.2', userId: 'UEXT', text: 'Most users cannot pay.' });
+    await eng.handleThreadReply({ channelId: 'C_acme', threadTs: '9.2', userId: 'UEXT', text: 'Card checkout.' });
+
+    const report = db.prepare(`SELECT * FROM tenant_reports LIMIT 1`).get() as TenantReport;
+    expect(report.routed_channel_id).toBe('C_pay');
+    const raw = db.prepare(`SELECT value FROM config WHERE key = ?`).get(`preincident:${report.id}`) as { value: string };
+    const pre = JSON.parse(raw.value);
+    expect(pre.inviteUserIds).toEqual(['U_PAY_IC']);
+    expect(pre.inviteUserIds).not.toContain('U_AUTH_IC');
+  });
+
+  it('collects guided intake in-thread, routes, records, matches roster, and acks safely', async () => {
     const db = seededDb();
     const eng = new ReporterEngine(db, new FakeSlack(), null); // keyword fallback path
     eng.loadCache();
     const slack = (eng as unknown as { slack: FakeSlack }).slack;
     const t = eng.tenantForChannel('C_acme')!;
+    insertRosterMember(db, {
+      tenant_id: 'acme',
+      user_id: 'U_PAY_IC',
+      role: 'payments ic',
+      match_text: 'payments billing checkout',
+      created_at: 3,
+    });
 
-    const report = await eng.handleReport({ tenant: t, reporterUserId: 'UEXT', text: 'payments are failing for our users', threadTs: '10.1' });
+    const started = await eng.handleReport({ tenant: t, reporterUserId: 'UEXT', text: 'payments are failing for our users', threadTs: '10.1' });
+    expect(started).toBeNull();
+    expect(slack.posted.filter((p) => p.channel === 'C_acme')).toHaveLength(1);
+    expect(slack.posted[0].text).toMatch(/reply in this thread/i);
+    expect(slack.posted[0].text).not.toMatch(/C_pay|C_triage|war room|\$/i);
 
-    expect(report.id).toMatch(/^TR-\d{8}-001$/);
-    expect(report.routed_channel_id).toBe('C_pay');
-    expect(report.status).toBe('routed');
+    await eng.handleThreadReply({ channelId: 'C_acme', threadTs: '10.1', userId: 'UEXT', text: 'About 70% of users cannot pay.' });
+    await eng.handleThreadReply({ channelId: 'C_acme', threadTs: '10.1', userId: 'UEXT', text: 'Started ten minutes ago and is still happening.' });
+    const report = await eng.handleThreadReply({
+      channelId: 'C_acme',
+      threadTs: '10.1',
+      userId: 'UEXT',
+      text: 'Checkout card submission shows payment timeout.',
+    });
+
+    expect(report).toBe(true);
+    const stored = db.prepare(`SELECT * FROM tenant_reports LIMIT 1`).get() as TenantReport;
+    expect(stored.id).toMatch(/^TR-\d{8}-001$/);
+    expect(stored.routed_channel_id).toBe('C_pay');
+    expect(stored.status).toBe('routed');
+    expect(stored.report_text).toContain('Q: What user impact');
+    expect(stored.report_text).toContain('A: About 70%');
 
     const card = slack.posted.find((p) => p.channel === 'C_pay');
     expect(card).toBeDefined();
-    const ack = slack.posted.find((p) => p.channel === 'C_acme');
+    const ack = slack.posted.filter((p) => p.channel === 'C_acme').at(-1)!;
     expect(ack).toBeDefined();
     expect(ack!.thread_ts).toBe('10.1');
 
     // Customer-safe: ack must not leak internal channel ids or war-room/cost terms.
     expect(ack!.text).not.toMatch(/C_pay|C_triage|war room|\$/i);
-    expect(ack!.text).toContain(report.id);
+    expect(ack!.text).toContain(stored.id);
 
-    const raw = db.prepare(`SELECT value FROM config WHERE key = ?`).get(`preincident:${report.id}`) as { value: string };
+    const raw = db.prepare(`SELECT value FROM config WHERE key = ?`).get(`preincident:${stored.id}`) as { value: string };
     const pre = JSON.parse(raw.value);
-    expect(pre.tenantReportId).toBe(report.id);
+    expect(pre.tenantReportId).toBe(stored.id);
     expect(pre.sourceChannelId).toBe('C_pay'); // internal channel — war-room notice goes here, not the customer
+    expect(pre.inviteUserIds).toEqual(['U_PAY_IC']);
+    expect(pre.seedContext).toContain('Matched roster: <@U_PAY_IC>');
   });
 });
 
@@ -149,7 +254,11 @@ describe('ReporterEngine loop-back (customer-safe)', () => {
     eng.loadCache();
     const slack = (eng as unknown as { slack: FakeSlack }).slack;
     const t = eng.tenantForChannel('C_acme')!;
-    const report = await eng.handleReport({ tenant: t, reporterUserId: 'UEXT', text: 'login is down', threadTs: '11.0' });
+    await eng.handleReport({ tenant: t, reporterUserId: 'UEXT', text: 'login is down', threadTs: '11.0' });
+    await eng.handleThreadReply({ channelId: 'C_acme', threadTs: '11.0', userId: 'UEXT', text: 'All admins cannot sign in.' });
+    await eng.handleThreadReply({ channelId: 'C_acme', threadTs: '11.0', userId: 'UEXT', text: 'Started now and is still happening.' });
+    await eng.handleThreadReply({ channelId: 'C_acme', threadTs: '11.0', userId: 'UEXT', text: 'SSO callback fails.' });
+    const report = db.prepare(`SELECT * FROM tenant_reports LIMIT 1`).get() as TenantReport;
 
     await eng.onIncidentDeclaredFromReport(report.id, 'INC-20260708-001');
     const updated = getTenantReport(db, report.id)!;

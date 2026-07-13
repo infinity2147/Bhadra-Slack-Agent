@@ -6,9 +6,12 @@ import {
   getConfigValue,
   insertTenant,
   insertRoutingRule,
+  insertRosterMember,
   getTenant,
   listTenants,
+  rosterForTenant,
   rulesForTenant,
+  removeRosterMember,
   removeTenant,
 } from '../db/index.js';
 import type { ScenarioName } from '../engine/drill.js';
@@ -24,7 +27,7 @@ const HELP = `*Sentinel IC commands*
 \`/incident drill [redis|deploy|db|payment]\` — run a chaos drill in this channel
 \`/incident config cost <service> <usd_per_min>\` — set the 💸 cost rate
 \`/incident config watch <#channel>\` — add a channel to the watch list
-\`/incident tenant …\` — manage customer report routing (add | rule | prompt | list | remove)
+\`/incident tenant …\` — manage customer report routing (add | rule | prompt | intake | roster | list | remove)
 \`/incident help\` — this message`;
 
 export function registerCommands(app: BoltApp, ctx: AppContext): void {
@@ -224,13 +227,54 @@ async function handleTenant(ctx: AppContext, rest: string[], respond: Respond): 
     return;
   }
 
+  if (action === 'intake' && args.length >= 1) {
+    const [slug, ...questionParts] = args;
+    if (!getTenant(ctx.db, slug)) {
+      await respond({ response_type: 'ephemeral', text: `Unknown tenant \`${slug}\`.` });
+      return;
+    }
+    if (questionParts.length === 0) {
+      const configured = getConfigValue(ctx.db, `tenant_intake:${slug}`);
+      await respond({
+        response_type: 'ephemeral',
+        text: configured
+          ? `Configured intake questions for \`${slug}\`:\n${configured
+              .split('\n')
+              .map((q, i) => `${i + 1}. ${q}`)
+              .join('\n')}`
+          : `No custom intake questions for \`${slug}\`; defaults are active.`,
+      });
+      return;
+    }
+    const questions = questionParts
+      .join(' ')
+      .split('|')
+      .map((q) => q.trim())
+      .filter(Boolean);
+    if (questions.length === 0) {
+      await respond({ response_type: 'ephemeral', text: 'Provide one or more questions separated by `|`.' });
+      return;
+    }
+    setConfigValue(ctx.db, `tenant_intake:${slug}`, questions.join('\n'));
+    await respond({ response_type: 'ephemeral', text: `✅ Intake script updated for \`${slug}\` (${questions.length} questions).` });
+    return;
+  }
+
+  if (action === 'roster' && args.length >= 2) {
+    await handleTenantRoster(ctx, args, respond, nowS);
+    return;
+  }
+
   if (action === 'list') {
     const tenants = listTenants(ctx.db);
     const lines = tenants.map((t) => {
       const rules = rulesForTenant(ctx.db, t.id)
         .map((r) => `   • <#${r.target_channel_id}>: ${r.description}`)
         .join('\n');
-      return `*${t.id}* (${t.tier ?? 'standard'}) on <#${t.channel_id}> → default <#${t.default_channel_id}>\n${rules || '   • (no rules)'}`;
+      const roster = rosterForTenant(ctx.db, t.id)
+        .map((r) => `   • <@${r.user_id}> (${r.role}): ${r.match_text || '*'}`)
+        .join('\n');
+      return `*${t.id}* (${t.tier ?? 'standard'}) on <#${t.channel_id}> → default <#${t.default_channel_id}>\nRules:\n${rules || '   • (no rules)'}\nRoster:\n${roster || '   • (no roster)'}`;
     });
     await respond({ response_type: 'ephemeral', text: lines.join('\n\n') || 'No tenants registered.' });
     return;
@@ -245,6 +289,60 @@ async function handleTenant(ctx: AppContext, rest: string[], respond: Respond): 
 
   await respond({
     response_type: 'ephemeral',
-    text: 'Usage: `/incident tenant add <slug> <#channel> [--tier t] [--default #chan]` · `rule <slug> <#channel> <desc>` · `prompt <slug> <text>` · `list` · `remove <slug>`',
+    text: 'Usage: `/incident tenant add <slug> <#channel> [--tier t] [--default #chan]` · `rule <slug> <#channel> <desc>` · `prompt <slug> <text>` · `intake <slug> q1 | q2` · `roster <slug> add <@user> <role> <keywords>` · `list` · `remove <slug>`',
   });
+}
+
+async function handleTenantRoster(ctx: AppContext, args: string[], respond: Respond, nowS: number): Promise<void> {
+  const [slug, op, ...rest] = args;
+  if (!getTenant(ctx.db, slug)) {
+    await respond({ response_type: 'ephemeral', text: `Unknown tenant \`${slug}\`.` });
+    return;
+  }
+
+  if (op === 'list') {
+    const lines = rosterForTenant(ctx.db, slug).map((r) => `<@${r.user_id}> (${r.role}): ${r.match_text || '*'}`);
+    await respond({ response_type: 'ephemeral', text: lines.join('\n') || `No roster entries for \`${slug}\`.` });
+    return;
+  }
+
+  if (op === 'add' && rest.length >= 2) {
+    const [userArg, role, ...matchParts] = rest;
+    const userId = parseUserArg(userArg);
+    if (!userId) {
+      await respond({ response_type: 'ephemeral', text: 'Use a Slack user mention like `<@U123>`.' });
+      return;
+    }
+    insertRosterMember(ctx.db, {
+      tenant_id: slug,
+      user_id: userId,
+      role,
+      match_text: matchParts.join(' ') || '*',
+      created_at: nowS,
+    });
+    await respond({ response_type: 'ephemeral', text: `✅ Roster entry added for \`${slug}\`: <@${userId}> (${role}).` });
+    return;
+  }
+
+  if (op === 'remove' && rest.length >= 1) {
+    const userId = parseUserArg(rest[0]);
+    if (!userId) {
+      await respond({ response_type: 'ephemeral', text: 'Use a Slack user mention like `<@U123>`.' });
+      return;
+    }
+    removeRosterMember(ctx.db, slug, userId);
+    await respond({ response_type: 'ephemeral', text: `🗑️ Removed <@${userId}> from \`${slug}\` roster.` });
+    return;
+  }
+
+  await respond({
+    response_type: 'ephemeral',
+    text: 'Usage: `/incident tenant roster <slug> add <@user> <role> <keywords|*>` · `list` · `remove <@user>`',
+  });
+}
+
+function parseUserArg(raw: string): string | undefined {
+  const mention = raw.match(/^<@([A-Z0-9]+)(?:\|[^>]*)?>$/i);
+  if (mention) return mention[1];
+  return /^U[A-Z0-9]{3,}$/i.test(raw) ? raw : undefined;
 }

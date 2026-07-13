@@ -2,8 +2,13 @@ import type { Tenant, TenantReport } from '../../db/index.js';
 import type { Block } from './warroom.js';
 
 /** Triage card posted into the routed INTERNAL team channel for a customer report. */
-export function tenantReportTriageBlocks(report: TenantReport, tenant: Tenant, summary: string): Block[] {
-  return [
+export function tenantReportTriageBlocks(
+  report: TenantReport,
+  tenant: Tenant,
+  summary: string,
+  opts: { roster?: { userId: string; role: string }[] } = {},
+): Block[] {
+  const blocks: Block[] = [
     {
       type: 'section',
       text: {
@@ -21,6 +26,19 @@ export function tenantReportTriageBlocks(report: TenantReport, tenant: Tenant, s
       ],
     },
     { type: 'section', text: { type: 'mrkdwn', text: `> ${report.report_text.replace(/\n/g, '\n> ')}` } },
+  ];
+  if (opts.roster?.length) {
+    blocks.push({
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `Matched roster: ${opts.roster.map((m) => `<@${m.userId}> (${m.role})`).join(', ')}`,
+        },
+      ],
+    });
+  }
+  blocks.push(
     {
       type: 'actions',
       elements: [
@@ -39,5 +57,6 @@ export function tenantReportTriageBlocks(report: TenantReport, tenant: Tenant, s
         },
       ],
     },
-  ];
+  );
+  return blocks;
 }

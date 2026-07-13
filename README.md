@@ -40,10 +40,12 @@ Give your customers a direct line without a helpdesk. Share one Slack Connect ch
     /incident tenant add acme #acme-yourco --tier enterprise --default #support-triage
     /incident tenant rule acme #payments-team  payments, billing, refunds, invoices
     /incident tenant rule acme #platform-team   login, SSO, access, authentication
+    /incident tenant intake acme  What impact are you seeing? | When did it start? | Which workflow or error is affected?
+    /incident tenant roster acme add @sam payments-ic payments, billing, checkout
     /incident tenant prompt acme  Acme is enterprise; treat checkout errors as urgent
     /incident tenant list
 
-When someone at Acme **@mentions the bot** in their channel, Sentinel classifies the report against Acme's rules (LLM router with a keyword/default fallback), posts a triage card to the right internal team (`[Declare incident] [Decline]`), and acknowledges the customer in-thread. Declaring builds the usual war room; on declare and on resolve, the customer's thread gets a customer-safe update. Reports never leak internal channel names, war-room links, or cost figures back to the customer.
+When someone at Acme **@mentions the bot** in their channel, Sentinel starts a short guided intake in that same thread, reads the customer's normal thread replies, then classifies the completed transcript against Acme's rules (LLM router with a keyword/default fallback). It posts a triage card to the right internal team (`[Declare incident] [Decline]`), matches Acme's tenant-defined responder roster, and acknowledges the customer in-thread. Declaring builds the usual war room, invites the matched internal responders, and seeds the room with the intake transcript; on declare and on resolve, the customer's thread gets a customer-safe update. Reports never leak internal channel names, war-room links, internal roster members, or cost figures back to the customer.
 
 Why @mention (not a slash command): Slack Connect does not deliver slash commands or interactive buttons to *external* users, so the customer trigger is an @mention. Admin `/incident tenant …` commands run from your own internal channels, and the customer never needs to install the app — they just need the bot added to the shared channel.
 

@@ -43,6 +43,18 @@ export function registerEvents(app: BoltApp, ctx: AppContext): void {
         return;
       }
 
+      // Tenant intake replies: Slack Connect customers cannot use slash commands
+      // or internal buttons, so intake advances from normal in-thread replies.
+      if (ctx.reporter.isTenantChannel(msg.channel) && msg.user && msg.user !== ctx.botUserId && !msg.bot_id && msg.thread_ts) {
+        const consumed = await ctx.reporter.handleThreadReply({
+          channelId: msg.channel,
+          threadTs: msg.thread_ts,
+          userId: msg.user,
+          text: msg.text,
+        });
+        if (consumed) return;
+      }
+
       // War-room channels: every message becomes timeline (spec §6.2).
       const warIncident = getIncidentByChannel(ctx.db, msg.channel);
       if (warIncident && msg.user && msg.user !== ctx.botUserId) {

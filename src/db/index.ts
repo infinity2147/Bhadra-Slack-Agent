@@ -87,6 +87,10 @@ export function openDb(path = ':memory:'): Database {
   if (!cols.some((c) => c.name === 'service_guess')) {
     db.exec(`ALTER TABLE signals ADD COLUMN service_guess TEXT`);
   }
+  const intakeCols = db.prepare(`PRAGMA table_info(tenant_intakes)`).all() as { name: string }[];
+  if (intakeCols.length > 0 && !intakeCols.some((c) => c.name === 'questions_json')) {
+    db.exec(`ALTER TABLE tenant_intakes ADD COLUMN questions_json TEXT NOT NULL DEFAULT '[]'`);
+  }
   return db;
 }
 
@@ -312,6 +316,15 @@ export interface TenantRoutingRule {
   created_at: number;
 }
 
+export interface TenantRosterMember {
+  id: number;
+  tenant_id: string;
+  user_id: string;
+  role: string;
+  match_text: string;
+  created_at: number;
+}
+
 export interface TenantReport {
   id: string;
   tenant_id: string;
@@ -325,6 +338,22 @@ export interface TenantReport {
   status: string; // routed | declined | linked_incident
   incident_id: string | null;
   created_at: number;
+}
+
+export interface TenantIntake {
+  id: number;
+  tenant_id: string;
+  reporter_user_id: string | null;
+  source_channel_id: string;
+  source_thread_ts: string;
+  initial_text: string;
+  questions_json: string;
+  answers_json: string;
+  next_question_index: number;
+  status: string; // collecting | routed
+  report_id: string | null;
+  created_at: number;
+  updated_at: number;
 }
 
 export function insertTenant(db: Database, t: Tenant): void {
@@ -352,6 +381,8 @@ export function listTenants(db: Database): Tenant[] {
 export function removeTenant(db: Database, id: string): void {
   const tx = db.transaction((tid: string) => {
     db.prepare(`DELETE FROM tenant_routing_rules WHERE tenant_id = ?`).run(tid);
+    db.prepare(`DELETE FROM tenant_roster_members WHERE tenant_id = ?`).run(tid);
+    db.prepare(`DELETE FROM tenant_intakes WHERE tenant_id = ?`).run(tid);
     db.prepare(`DELETE FROM tenants WHERE id = ?`).run(tid);
   });
   tx(id);
@@ -371,6 +402,29 @@ export function rulesForTenant(db: Database, tenantId: string): TenantRoutingRul
   return db
     .prepare(`SELECT * FROM tenant_routing_rules WHERE tenant_id = ? ORDER BY id ASC`)
     .all(tenantId) as TenantRoutingRule[];
+}
+
+export function insertRosterMember(
+  db: Database,
+  r: { tenant_id: string; user_id: string; role: string; match_text: string; created_at: number },
+): number {
+  const res = db
+    .prepare(
+      `INSERT INTO tenant_roster_members (tenant_id, user_id, role, match_text, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(r.tenant_id, r.user_id, r.role, r.match_text, r.created_at);
+  return Number(res.lastInsertRowid);
+}
+
+export function rosterForTenant(db: Database, tenantId: string): TenantRosterMember[] {
+  return db
+    .prepare(`SELECT * FROM tenant_roster_members WHERE tenant_id = ? ORDER BY id ASC`)
+    .all(tenantId) as TenantRosterMember[];
+}
+
+export function removeRosterMember(db: Database, tenantId: string, userId: string): void {
+  db.prepare(`DELETE FROM tenant_roster_members WHERE tenant_id = ? AND user_id = ?`).run(tenantId, userId);
 }
 
 export function nextTenantReportId(db: Database, dateStamp: string): string {
@@ -406,4 +460,36 @@ export function tenantReportsForIncident(db: Database, incidentId: string): Tena
   return db
     .prepare(`SELECT * FROM tenant_reports WHERE incident_id = ? ORDER BY id ASC`)
     .all(incidentId) as TenantReport[];
+}
+
+export function insertTenantIntake(
+  db: Database,
+  i: Omit<TenantIntake, 'id'>,
+): number {
+  const res = db
+    .prepare(
+      `INSERT INTO tenant_intakes (tenant_id, reporter_user_id, source_channel_id, source_thread_ts,
+         initial_text, questions_json, answers_json, next_question_index, status, report_id, created_at, updated_at)
+       VALUES (@tenant_id, @reporter_user_id, @source_channel_id, @source_thread_ts,
+         @initial_text, @questions_json, @answers_json, @next_question_index, @status, @report_id, @created_at, @updated_at)`,
+    )
+    .run(i as unknown as Record<string, unknown>);
+  return Number(res.lastInsertRowid);
+}
+
+export function getTenantIntakeByThread(
+  db: Database,
+  sourceChannelId: string,
+  sourceThreadTs: string,
+): TenantIntake | undefined {
+  return db
+    .prepare(`SELECT * FROM tenant_intakes WHERE source_channel_id = ? AND source_thread_ts = ?`)
+    .get(sourceChannelId, sourceThreadTs) as TenantIntake | undefined;
+}
+
+export function updateTenantIntake(db: Database, id: number, patch: Partial<TenantIntake>): void {
+  const keys = Object.keys(patch).filter((k) => k !== 'id');
+  if (keys.length === 0) return;
+  const sets = keys.map((k) => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE tenant_intakes SET ${sets} WHERE id = @id`).run({ ...patch, id } as Record<string, unknown>);
 }

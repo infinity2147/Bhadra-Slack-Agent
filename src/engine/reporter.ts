@@ -10,20 +10,28 @@
  */
 import {
   getTenantByChannel,
+  getTenant,
+  getTenantIntakeByThread,
   getTenantReport,
+  insertTenantIntake,
   insertTenantReport,
   nextTenantReportId,
+  rosterForTenant,
   rulesForTenant,
+  getConfigValue,
   setConfigValue,
   tenantReportsForIncident,
+  updateTenantIntake,
   updateTenantReport,
   type Database,
   type Severity,
   type Tenant,
+  type TenantIntake,
   type TenantReport,
+  type TenantRosterMember,
 } from '../db/index.js';
 import type { LlmClient } from '../llm/client.js';
-import { routeTenantReport } from '../llm/prompts.js';
+import { generateIntakeQuestions, routeAndStaffTenantReport, routeTenantReport } from '../llm/prompts.js';
 import type { SlackPort } from '../ports.js';
 import { tenantReportTriageBlocks } from '../slack/blocks/tenantReport.js';
 import { logger } from '../util/logger.js';
@@ -36,10 +44,22 @@ export interface RouteDecision {
   summary: string;
 }
 
+interface StaffedRouteDecision extends RouteDecision {
+  roster: TenantRosterMember[];
+}
+
 export interface ReporterOpts {
   /** Fallback wording when no rules/LLM produce a category. */
   defaultCategory?: string;
+  /** Tenant admins can override per tenant with /incident tenant intake. */
+  defaultIntakeQuestions?: string[];
 }
+
+const DEFAULT_INTAKE_QUESTIONS = [
+  'What user impact are you seeing, and roughly how many users are affected?',
+  'When did this start, and is it still happening right now?',
+  'Which workflow, URL, region, or account segment is affected? Any error text helps.',
+];
 
 export class ReporterEngine {
   private channelToTenant = new Map<string, string>();
@@ -131,22 +151,139 @@ export class ReporterEngine {
     };
   }
 
-  /** Full intake: route → record → triage card (internal) → customer-safe ack (tenant thread). */
+  intakeQuestions(tenantId: string): string[] {
+    const configured = getConfigValue(this.db, `tenant_intake:${tenantId}`);
+    const questions = configured
+      ? configured
+          .split('\n')
+          .map((q) => q.trim())
+          .filter(Boolean)
+      : [];
+    return questions.length > 0 ? questions : this.opts.defaultIntakeQuestions ?? DEFAULT_INTAKE_QUESTIONS;
+  }
+
+  async intakeQuestionsFor(tenant: Tenant, initialText: string): Promise<string[]> {
+    const configured = getConfigValue(this.db, `tenant_intake:${tenant.id}`);
+    if (configured) return this.intakeQuestions(tenant.id);
+    if (this.opts.defaultIntakeQuestions) return this.opts.defaultIntakeQuestions;
+
+    if (this.llm) {
+      const rules = rulesForTenant(this.db, tenant.id).map((r, i) => ({ key: `r${i + 1}`, description: r.description }));
+      try {
+        const out = await this.llm.completeJson(
+          {
+            system: generateIntakeQuestions.system,
+            user: generateIntakeQuestions.buildUser(initialText, tenant.name, tenant.tier, rules, tenant.extra_prompt),
+            temperature: generateIntakeQuestions.temperature,
+          },
+          generateIntakeQuestions.schema,
+        );
+        if (out.questions.length > 0) return out.questions;
+      } catch (err) {
+        logger.warn({ err, tenant: tenant.id }, 'LLM intake question generation failed; using default questions');
+      }
+    }
+    return DEFAULT_INTAKE_QUESTIONS;
+  }
+
+  /** Full intake start: create/reuse per-thread intake and ask the first customer-safe question. */
   async handleReport(opts: {
     tenant: Tenant;
     reporterUserId: string;
     text: string;
     threadTs: string;
-  }): Promise<TenantReport> {
-    const decision = await this.route(opts.tenant, opts.text);
-    const id = nextTenantReportId(this.db, dateStamp(now()));
-    const report: TenantReport = {
-      id,
+  }): Promise<TenantReport | null> {
+    const existing = getTenantIntakeByThread(this.db, opts.tenant.channel_id, opts.threadTs);
+    if (existing && existing.status === 'collecting') {
+      return this.advanceIntake(existing, opts.text);
+    }
+    if (existing?.report_id) return getTenantReport(this.db, existing.report_id) ?? null;
+
+    const ts = now();
+    const questions = await this.intakeQuestionsFor(opts.tenant, opts.text);
+    insertTenantIntake(this.db, {
       tenant_id: opts.tenant.id,
       reporter_user_id: opts.reporterUserId,
-      report_text: opts.text,
       source_channel_id: opts.tenant.channel_id,
       source_thread_ts: opts.threadTs,
+      initial_text: opts.text,
+      questions_json: JSON.stringify(questions),
+      answers_json: '[]',
+      next_question_index: 0,
+      status: 'collecting',
+      report_id: null,
+      created_at: ts,
+      updated_at: ts,
+    });
+
+    const [firstQuestion] = questions;
+    if (firstQuestion) {
+      await this.slack.postMessage({
+        channel: opts.tenant.channel_id,
+        thread_ts: opts.threadTs,
+        text: `Thanks — I need a little more detail so we route this correctly. Please reply in this thread:\n\n${firstQuestion}`,
+      });
+      return null;
+    }
+    const intake = getTenantIntakeByThread(this.db, opts.tenant.channel_id, opts.threadTs)!;
+    return this.finalizeIntake(intake);
+  }
+
+  async handleThreadReply(opts: {
+    channelId: string;
+    threadTs: string;
+    userId: string;
+    text: string;
+  }): Promise<boolean> {
+    const intake = getTenantIntakeByThread(this.db, opts.channelId, opts.threadTs);
+    if (!intake || intake.status !== 'collecting') return false;
+    return !!(await this.advanceIntake(intake, opts.text));
+  }
+
+  private async advanceIntake(intake: TenantIntake, answer: string): Promise<TenantReport | null> {
+    const tenant = getTenant(this.db, intake.tenant_id);
+    if (!tenant) return null;
+
+    const questions = parseQuestions(intake.questions_json, this.intakeQuestions(tenant.id));
+    const answers = parseAnswers(intake.answers_json);
+    const question = questions[intake.next_question_index] ?? 'Additional detail';
+    answers.push({ question, answer });
+
+    const nextIndex = intake.next_question_index + 1;
+    updateTenantIntake(this.db, intake.id, {
+      answers_json: JSON.stringify(answers),
+      next_question_index: nextIndex,
+      updated_at: now(),
+    });
+
+    if (nextIndex < questions.length) {
+      await this.slack.postMessage({
+        channel: intake.source_channel_id,
+        thread_ts: intake.source_thread_ts,
+        text: questions[nextIndex],
+      });
+      return null;
+    }
+
+    return this.finalizeIntake(getTenantIntakeByThread(this.db, intake.source_channel_id, intake.source_thread_ts)!);
+  }
+
+  private async finalizeIntake(intake: TenantIntake): Promise<TenantReport> {
+    const tenant = getTenant(this.db, intake.tenant_id);
+    if (!tenant) throw new Error(`unknown tenant ${intake.tenant_id}`);
+
+    const transcript = intakeTranscript(intake);
+    const staffed = await this.routeAndStaff(tenant, transcript);
+    const decision = staffed;
+    const id = nextTenantReportId(this.db, dateStamp(now()));
+    const matchedRoster = staffed.roster;
+    const report: TenantReport = {
+      id,
+      tenant_id: tenant.id,
+      reporter_user_id: intake.reporter_user_id,
+      report_text: transcript,
+      source_channel_id: tenant.channel_id,
+      source_thread_ts: intake.source_thread_ts,
       routed_channel_id: decision.targetChannelId,
       category: decision.category,
       severity_suggestion: decision.severity,
@@ -169,23 +306,88 @@ export class ReporterEngine {
         signalIds: [],
         sourceChannelId: decision.targetChannelId,
         tenantReportId: id,
+        inviteUserIds: matchedRoster.map((m) => m.user_id),
+        seedContext: buildSeedContext(tenant, report, decision.summary, matchedRoster),
       }),
     );
 
     await this.slack.postMessage({
       channel: decision.targetChannelId,
-      text: `📨 Customer report from ${opts.tenant.name} (${id})`,
-      blocks: tenantReportTriageBlocks(report, opts.tenant, decision.summary),
+      text: `📨 Customer report from ${tenant.name} (${id})`,
+      blocks: tenantReportTriageBlocks(report, tenant, decision.summary, {
+        roster: matchedRoster.map((m) => ({ userId: m.user_id, role: m.role })),
+      }),
     });
 
     // Customer-safe acknowledgement in the tenant's thread (no internal names/links).
     await this.slack.postMessage({
-      channel: opts.tenant.channel_id,
-      thread_ts: opts.threadTs,
+      channel: tenant.channel_id,
+      thread_ts: intake.source_thread_ts,
       text: `👋 Thanks — we've logged this (ref \`${id}\`) and our team is reviewing it. We'll post updates right here.`,
     });
 
+    updateTenantIntake(this.db, intake.id, { status: 'routed', report_id: id, updated_at: now() });
+
     return report;
+  }
+
+  private matchRoster(tenantId: string, text: string): TenantRosterMember[] {
+    const roster = rosterForTenant(this.db, tenantId);
+    const lower = text.toLowerCase();
+    return roster.filter((member) => {
+      const terms = member.match_text
+        .toLowerCase()
+        .split(/[^a-z0-9_*]+/)
+        .filter(Boolean);
+      if (terms.length === 0 || terms.includes('*')) return true;
+      return terms.some((term) => lower.includes(term));
+    });
+  }
+
+  async routeAndStaff(tenant: Tenant, transcript: string): Promise<StaffedRouteDecision> {
+    const rules = rulesForTenant(this.db, tenant.id);
+    const keyedRules = rules.map((r, i) => ({ key: `r${i + 1}`, description: r.description, channelId: r.target_channel_id }));
+    const roster = rosterForTenant(this.db, tenant.id);
+    const keyedRoster = roster.map((r, i) => ({ key: `u${i + 1}`, member: r }));
+
+    if (this.llm) {
+      try {
+        const out = await this.llm.completeJson(
+          {
+            system: routeAndStaffTenantReport.system,
+            user: routeAndStaffTenantReport.buildUser(
+              transcript,
+              tenant.name,
+              tenant.tier,
+              keyedRules.map((r) => ({ key: r.key, description: r.description })),
+              keyedRoster.map((r) => ({ key: r.key, role: r.member.role, matchText: r.member.match_text })),
+              tenant.extra_prompt,
+            ),
+            temperature: routeAndStaffTenantReport.temperature,
+          },
+          routeAndStaffTenantReport.schema,
+        );
+        const route = keyedRules.find((r) => r.key === out.route);
+        const allowedRoster = new Set(keyedRoster.map((r) => r.key));
+        const chosenRoster = (out.roster_keys ?? [])
+          .filter((key) => allowedRoster.has(key))
+          .map((key) => keyedRoster.find((r) => r.key === key)!.member);
+        return {
+          targetChannelId: route?.channelId ?? tenant.default_channel_id,
+          category: out.category || this.opts.defaultCategory || 'general',
+          severity: out.severity_suggestion,
+          summary: out.summary || transcript.slice(0, 140),
+          roster: chosenRoster,
+        };
+      } catch (err) {
+        logger.warn({ err, tenant: tenant.id }, 'LLM route+staff failed; using deterministic fallback');
+      }
+    }
+
+    return {
+      ...(await this.route(tenant, transcript)),
+      roster: this.matchRoster(tenant.id, transcript),
+    };
   }
 
   /** Loop-back: an internal team declared an incident from this report. */
@@ -211,4 +413,56 @@ export class ReporterEngine {
       });
     }
   }
+}
+
+function parseAnswers(raw: string): { question: string; answer: string }[] {
+  try {
+    const parsed = JSON.parse(raw) as { question?: unknown; answer?: unknown }[];
+    return parsed
+      .filter((a) => typeof a.question === 'string' && typeof a.answer === 'string')
+      .map((a) => ({ question: a.question as string, answer: a.answer as string }));
+  } catch {
+    return [];
+  }
+}
+
+function parseQuestions(raw: string, fallback: string[]): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown[];
+    const questions = parsed.filter((q): q is string => typeof q === 'string' && q.trim().length > 0);
+    return questions.length > 0 ? questions : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function intakeTranscript(intake: TenantIntake): string {
+  const answers = parseAnswers(intake.answers_json);
+  const lines = [`Initial report: ${intake.initial_text}`];
+  for (const a of answers) {
+    lines.push(`Q: ${a.question}`);
+    lines.push(`A: ${a.answer}`);
+  }
+  return lines.join('\n');
+}
+
+function buildSeedContext(
+  tenant: Tenant,
+  report: TenantReport,
+  summary: string,
+  roster: TenantRosterMember[],
+): string {
+  const rosterLine = roster.length
+    ? roster.map((m) => `<@${m.user_id}> (${m.role})`).join(', ')
+    : 'No tenant roster members matched this intake.';
+  return [
+    `Customer: ${tenant.name}${tenant.tier ? ` (${tenant.tier})` : ''}`,
+    `Report ref: ${report.id}`,
+    `Summary: ${summary}`,
+    `Suggested severity: ${report.severity_suggestion ?? 'unset'}`,
+    `Category: ${report.category ?? 'general'}`,
+    `Matched roster: ${rosterLine}`,
+    '',
+    report.report_text,
+  ].join('\n');
 }
